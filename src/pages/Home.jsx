@@ -8,10 +8,44 @@ export default function Home() {
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState(1); 
 
-  // Date Selection
-  const currentDate = new Date();
-  const [selectedYear, setSelectedYear] = useState(currentDate.getFullYear()); 
-  const [selectedMonth, setSelectedMonth] = useState(currentDate.getMonth() + 1);
+  // --- 1. DYNAMIC DATE LOGIC ---
+  const today = new Date();
+  const currentYear = today.getFullYear();
+  const currentMonth = today.getMonth() + 1; // 1-12
+
+  // State for selection
+  const [selectedYear, setSelectedYear] = useState(currentYear); 
+  const [selectedMonth, setSelectedMonth] = useState(currentMonth);
+
+  // Generate Years: Start from 2025 up to Current Year
+  // (If today is 2025, it shows [2025]. If today is 2026, it shows [2025, 2026])
+  const years = [];
+  for (let y = 2025; y <= currentYear; y++) {
+    years.push(y);
+  }
+
+  // Define All Months
+  const allMonths = [
+    { val: 1, label: 'January' }, { val: 2, label: 'February' }, { val: 3, label: 'March' },
+    { val: 4, label: 'April' },   { val: 5, label: 'May' },      { val: 6, label: 'June' },
+    { val: 7, label: 'July' },    { val: 8, label: 'August' },   { val: 9, label: 'September' },
+    { val: 10, label: 'October' },{ val: 11, label: 'November' },{ val: 12, label: 'December' }
+  ];
+
+  // Filter Months: Only show months up to now if current year is selected
+  const availableMonths = allMonths.filter(m => {
+    if (selectedYear < currentYear) return true; // Past years = All months allowed
+    return m.val <= currentMonth; // Current year = Only up to current month allowed
+  });
+
+  // Safety Check: If user switches year and the selected month becomes invalid, reset it
+  useEffect(() => {
+    if (selectedYear === currentYear && selectedMonth > currentMonth) {
+        setSelectedMonth(currentMonth);
+    }
+  }, [selectedYear]);
+
+  // --- END DATE LOGIC ---
 
   // Processed Data State
   const [reportData, setReportData] = useState({
@@ -22,27 +56,10 @@ export default function Home() {
     tenants: [] 
   });
 
-  const years = [2025, 2026, 2027];
-  const months = [
-    { val: 1, label: 'January' }, { val: 2, label: 'February' }, { val: 3, label: 'March' },
-    { val: 4, label: 'April' },   { val: 5, label: 'May' },      { val: 6, label: 'June' },
-    { val: 7, label: 'July' },    { val: 8, label: 'August' },   { val: 9, label: 'September' },
-    { val: 10, label: 'October' },{ val: 11, label: 'November' },{ val: 12, label: 'December' }
-  ];
-
-  // --- CUSTOM SORT ORDER ---
   const ZONE_ORDER = [
-    'แถวแรกในลานจอด',
-    'แถวสองในลานจอด',
-    'แถวสามในลานจอด',
-    'แถวสี่ในลานจอด',
-    'แถวห้าในลานจอด',
-    'แถวหกในลานจอด',
-    'จอดซ้อนแถวสองในลาน',
-    'จอดซ้อนแถวสี่ในลาน',
-    'ริมถนน',
-    'ศรีสมานฝั่ง MM',
-    'ศรีสมานฝั่งใหม่'
+    'แถวแรกในลานจอด', 'แถวสองในลานจอด', 'แถวสามในลานจอด', 'แถวสี่ในลานจอด',
+    'แถวห้าในลานจอด', 'แถวหกในลานจอด', 'จอดซ้อนแถวสองในลาน', 'จอดซ้อนแถวสี่ในลาน',
+    'ริมถนน', 'ศรีสมานฝั่ง MM', 'ศรีสมานฝั่งใหม่'
   ];
 
   useEffect(() => {
@@ -135,7 +152,6 @@ export default function Home() {
         }
       });
 
-      // SORTING LOGIC
       const inventoryList = Object.values(inventoryMap).sort((a, b) => {
         const indexA = ZONE_ORDER.indexOf(a.zone);
         const indexB = ZONE_ORDER.indexOf(b.zone);
@@ -192,7 +208,7 @@ export default function Home() {
     document.body.removeChild(link);
   };
 
-  const getMonthName = (m) => months.find(x => x.val === parseInt(m))?.label || m;
+  const getMonthName = (m) => allMonths.find(x => x.val === parseInt(m))?.label || m;
 
   return (
     <div className="space-y-6 animate-in fade-in duration-500">
@@ -201,17 +217,20 @@ export default function Home() {
       <div className="flex justify-between items-center">
         <h2 className="text-2xl font-bold text-[#002D72]">Reporting Center</h2>
         <div className="flex gap-3">
+            {/* YEAR SELECTOR */}
             <select 
               className="bg-white border border-gray-200 rounded-xl px-4 py-2 text-gray-700 shadow-sm outline-none focus:ring-2 focus:ring-[#FA4786] cursor-pointer"
               value={selectedYear} onChange={(e) => setSelectedYear(parseInt(e.target.value))}
             >
               {years.map((y) => <option key={y} value={y}>{y}</option>)}
             </select>
+
+            {/* MONTH SELECTOR (Dynamic) */}
             <select 
               className="bg-white border border-gray-200 rounded-xl px-4 py-2 text-gray-700 shadow-sm outline-none focus:ring-2 focus:ring-[#FA4786] cursor-pointer"
               value={selectedMonth} onChange={(e) => setSelectedMonth(parseInt(e.target.value))}
             >
-              {months.map((m) => <option key={m.val} value={m.val}>{m.label}</option>)}
+              {availableMonths.map((m) => <option key={m.val} value={m.val}>{m.label}</option>)}
             </select>
         </div>
       </div>
@@ -231,7 +250,7 @@ export default function Home() {
       <div className="grid grid-cols-3 bg-white p-1 rounded-xl border border-gray-200 shadow-sm">
         {[
             { id: 1, label: 'Booking Transactions', icon: Activity },
-            { id: 2, label: 'Parking Summary', icon: PieChart }, // <--- UPDATED LABEL
+            { id: 2, label: 'Parking Summary', icon: PieChart }, 
             { id: 3, label: 'Monthly Tenant Report', icon: Users },
         ].map(tab => (
             <button
@@ -309,7 +328,6 @@ export default function Home() {
                 {/* 2. INVENTORY (PARKING SUMMARY) */}
                 {activeTab === 2 && (
                     <Card className="p-6 animate-in fade-in slide-in-from-bottom-4">
-                        {/* UPDATED HEADER */}
                         <h3 className="text-lg font-bold text-[#002D72] mb-4">2. Parking Summary</h3>
                         <table className="w-full text-left">
                             <thead className="bg-[#002D72] text-white">
@@ -331,7 +349,6 @@ export default function Home() {
                                     </tr>
                                 ))}
                             </tbody>
-                            {/* UPDATED FOOTER ALIGNMENT */}
                             <tfoot className="bg-gray-100 font-bold border-t-2 border-gray-200">
                                 <tr>
                                     <td colSpan="2" className="py-3 px-4 text-left text-[#002D72] uppercase tracking-wider">GRAND TOTAL</td>

@@ -2,6 +2,7 @@ import React from 'react';
 import { Outlet, NavLink, useNavigate } from 'react-router-dom';
 import { Home, Calendar, Car, Users, FileSpreadsheet, LogOut, Shield } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import userLogo from '../assets/logo.png'; // <--- Import Logo
 
 const SidebarItem = ({ to, icon: Icon, label }) => (
   <NavLink 
@@ -21,19 +22,12 @@ export default function MainLayout() {
   const { user, role, logout } = useAuth();
   const navigate = useNavigate();
 
-  // --- CRITICAL UPDATE: Allow both Admin AND Master Admin to see the menu ---
+  // --- ALLOW BOTH ADMIN AND MASTER ADMIN ---
   const isAdmin = role === 'admin' || role === 'master_admin';
 
   const handleLogout = async () => {
     await logout();
     navigate('/login');
-  };
-
-  // Helper to show correct letter in avatar
-  const getAvatarLetter = () => {
-    if (role === 'master_admin') return 'M';
-    if (role === 'admin') return 'A';
-    return 'U';
   };
 
   return (
@@ -49,7 +43,7 @@ export default function MainLayout() {
         {/* Navigation Links */}
         <nav className="flex-1 py-6 space-y-2 overflow-y-auto">
           
-          {/* 1. PUBLIC ITEMS (Visible to Everyone) */}
+          {/* 1. PUBLIC ITEMS */}
           <SidebarItem to="/" icon={Home} label="Home" />
           <SidebarItem to="/booking" icon={Calendar} label="Booking" />
 
@@ -72,9 +66,14 @@ export default function MainLayout() {
         {/* Footer: User Profile & Logout */}
         <div className="p-4 border-t border-gray-100 bg-gray-50">
            <div className="mb-4 flex items-center gap-3 p-3 rounded-lg bg-white border shadow-sm">
-              <div className={`w-10 h-10 rounded-full text-white flex items-center justify-center font-bold shrink-0 ${role === 'master_admin' ? 'bg-[#FA4786]' : 'bg-secondary'}`}>
-                {getAvatarLetter()}
-              </div>
+              
+              {/* --- NEW LOGO IMAGE --- */}
+              <img 
+                src={userLogo} 
+                alt="User Logo" 
+                className="w-10 h-10 rounded-full object-cover border border-gray-200" 
+              />
+
               <div className="overflow-hidden">
                 <p className="text-sm font-bold text-gray-700 truncate w-32" title={user?.email}>
                   {user?.email}
