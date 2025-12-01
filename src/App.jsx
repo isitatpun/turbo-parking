@@ -7,10 +7,11 @@ import MainLayout from './layout/MainLayout';
 import Login from './pages/Login';
 import Home from './pages/Home';
 import Booking from './pages/Booking';
+import BookingList from './pages/BookingList'; // <--- NEW IMPORT
 import CarParkPage from './pages/CarParkPage';
 import Employees from './pages/Employees';
 import BondHolder from './pages/BondHolder';
-import UserManagement from './pages/UserManagement'; // <--- New Page
+import UserManagement from './pages/UserManagement';
 
 // --- 1. PROTECTED ROUTE (Checks if Logged In) ---
 const ProtectedRoute = ({ children }) => {
@@ -36,8 +37,6 @@ const AdminRoute = ({ children }) => {
   return children;
 };
 
-// ... rest of App component
-
 export default function App() {
   return (
     <AuthProvider>
@@ -57,6 +56,14 @@ export default function App() {
             <Route path="booking" element={<Booking />} />
 
             {/* Admin Only Access */}
+            
+            {/* --- NEW PAGE: Booking Detail List --- */}
+            <Route path="booking-list" element={
+              <AdminRoute>
+                <BookingList />
+              </AdminRoute>
+            } />
+
             <Route path="car-park" element={
               <AdminRoute>
                 <CarParkPage />
