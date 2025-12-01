@@ -11,7 +11,7 @@ import {
 import * as XLSX from 'xlsx';
 import { saveAs } from 'file-saver';
 import jsPDF from 'jspdf';
-import autoTable from 'jspdf-autotable'; // Updated Import for compatibility
+import autoTable from 'jspdf-autotable';
 
 export default function Home() {
   const [loading, setLoading] = useState(true);
@@ -21,12 +21,11 @@ export default function Home() {
   // --- DATE FILTER STATE ---
   const today = new Date();
   const currentYear = today.getFullYear();
-  const currentMonth = today.getMonth(); // 0-11
+  const currentMonth = today.getMonth(); 
   
   const [selectedYear, setSelectedYear] = useState(currentYear);
   const [selectedMonth, setSelectedMonth] = useState(currentMonth);
 
-  // Safety Check
   useEffect(() => {
     if (selectedYear === currentYear && selectedMonth > currentMonth) {
         setSelectedMonth(currentMonth);
@@ -65,142 +64,163 @@ export default function Home() {
 
     } catch (error) {
       console.error("Error generating report:", error);
-      alert("Error generating report. Check console.");
     } finally {
       setLoading(false);
     }
   };
 
+  // --- HELPER: THAILAND DATE FORMAT ---
+  const formatThaiDate = (dateObj) => {
+    if (!dateObj) return '-';
+    return new Date(dateObj).toLocaleDateString('en-GB', { 
+        timeZone: 'Asia/Bangkok' 
+    });
+  };
+
+  const toMidnight = (dateInput) => {
+    const d = new Date(dateInput);
+    d.setHours(0, 0, 0, 0);
+    return d;
+  };
+
   // --- CORE CALCULATION ENGINE ---
   const processMonthlyData = (bookings, allSpots, bondHolders, year, month) => {
-    const startDate = new Date(year, month, 1);
-    const endDate = new Date(year, month + 1, 0); // Last day of chosen month
-    const daysInMonth = endDate.getDate(); // e.g. 30 or 31
+    const monthStart = new Date(year, month, 1);
+    const monthEnd = new Date(year, month + 1, 0); 
+    const daysInMonth = monthEnd.getDate();
 
-    // Helper: Bond Holder Check
+    // Bond Holder Check
     const isFreeParking = (empCode) => {
         if (!empCode) return false;
         const holder = bondHolders?.find(b => b.employee_code === empCode);
         return holder && (holder.tier === 1 || holder.tier === 2);
     };
 
-    // Helper: Fee & Date Calculation
-    const calculateMonthFee = (booking) => {
-        const bStart = new Date(booking.booking_start);
-        const bEnd = new Date(booking.booking_end);
-        
-        // 1. Determine Effective Dates for THIS Month
-        // If booking starts before Nov 1, effective start is Nov 1.
-        const effectiveStart = bStart < startDate ? startDate : bStart;
-        
-        // If booking ends after Nov 30, effective end is Nov 30.
-        const effectiveEnd = bEnd > endDate ? endDate : bEnd;
-
-        // Validation: If no overlap
-        if (effectiveStart > effectiveEnd) return null;
-
-        // 2. Calculate Days
-        const diffTime = Math.abs(effectiveEnd - effectiveStart);
-        const daysOccupied = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1;
-
-        // 3. Calculate Fee (Prorated based on days in THIS month)
-        const price = booking.parking_spots?.price || 0;
-        const dailyRate = price / daysInMonth; 
-        const totalFee = Math.floor(dailyRate * daysOccupied);
-
-        const empCode = booking.employees?.employee_code;
-        const netFee = isFreeParking(empCode) ? 0 : totalFee;
-
-        return { 
-            total: totalFee, 
-            net: netFee, 
-            days: daysOccupied,
-            // Return effective dates for display
-            displayStart: effectiveStart,
-            displayEnd: effectiveEnd
-        };
-    };
-
+    // --- 1. MOVEMENT CALCULATION (Summary Table) ---
+    // Variables for Movement
+    let beg = { count: 0, total: 0, net: 0 };
+    let newB = { count: 0, total: 0, net: 0 }; // "New"
+    let exp = { count: 0, total: 0, net: 0 }; // "Expired"
+    
+    // Arrays for Lists
     const monthlyDetails = [];
     const newBookingsDetails = []; 
 
-    let beginning = { count: 0, total: 0, net: 0 };
-    let newBook = { count: 0, total: 0, net: 0 };
-    let expired = { count: 0, total: 0, net: 0 };
-    let ending = { count: 0, total: 0, net: 0 };
-    
+    // Financial Totals for Detail Report
     let grandTotalRevenue = 0;
     let grandNetRevenue = 0;
+    
+    // Occupancy
     let occupiedReservedCount = 0;
+    
+    // Report Cap Date (For Detail Report "Today" Cap)
+    const todayMidnight = toMidnight(new Date());
+    let reportCapDate = monthEnd;
+    if (monthEnd > todayMidnight) {
+        reportCapDate = todayMidnight;
+    }
 
     bookings?.forEach(b => {
-        const bStart = new Date(b.booking_start);
-        const bEnd = new Date(b.booking_end);
+        const bStart = toMidnight(b.booking_start);
+        const bEnd = toMidnight(b.booking_end);
         
-        // --- 1. DETAIL REPORT (Using Effective Dates) ---
-        const financials = calculateMonthFee(b);
+        const price = b.parking_spots?.price || 0;
+        const dailyRate = price / daysInMonth;
+        const isFree = isFreeParking(b.employees?.employee_code);
+
+        // --- A. MOVEMENT LOGIC (Specific Rules) ---
         
-        if (financials) {
-            grandTotalRevenue += financials.total;
-            grandNetRevenue += financials.net;
+        // 1. BEGINNING BALANCE: Active BEFORE month starts
+        // Logic: Calculate FULL MONTH potential revenue (as if it stayed the whole month)
+        if (bStart < monthStart && bEnd >= monthStart) {
+            beg.count++;
+            const fee = price; // Full Month Price
+            const net = isFree ? 0 : fee;
+            
+            beg.total += fee;
+            beg.net += net;
+        }
+
+        // 2. NEW BOOKING: Starts WITHIN this month
+        // Logic: Calculate Pro-rated from Start -> MonthEnd
+        if (bStart >= monthStart && bStart <= monthEnd) {
+            newB.count++;
+            
+            // Days from Start to MonthEnd (Inclusive)
+            const diffTime = monthEnd.getTime() - bStart.getTime();
+            const daysActive = Math.round(diffTime / (1000 * 60 * 60 * 24)) + 1;
+            
+            const fee = Math.floor(dailyRate * daysActive);
+            const net = isFree ? 0 : fee;
+
+            newB.total += fee;
+            newB.net += net;
+
+            // Add to New Booking List (3.3)
+            newBookingsDetails.push({
+                ...b,
+                start_date: b.booking_start,
+                end_date: b.booking_end
+            });
+        }
+
+        // 3. EXPIRED BOOKING: Ends WITHIN this month (before month end)
+        // Logic: Calculate Revenue LOST (Negative)
+        // Formula: Price * (DaysRemaining / DaysInMonth) * -1
+        if (bEnd >= monthStart && bEnd < monthEnd) {
+            exp.count++;
+
+            // Days Remaining AFTER booking ends (Non-inclusive of end date)
+            // e.g. Ends 20th. Lost 21st to 30th (10 days)
+            const diffTime = monthEnd.getTime() - bEnd.getTime();
+            const daysLost = Math.round(diffTime / (1000 * 60 * 60 * 24)); // No +1 because we count days AFTER
+
+            const lostFee = Math.floor(dailyRate * daysLost) * -1; // Negative
+            const lostNet = isFree ? 0 : lostFee;
+
+            exp.total += lostFee;
+            exp.net += lostNet;
+        }
+
+        // --- B. DETAIL REPORT LOGIC (Standard Realized Revenue) ---
+        const effectiveStart = bStart > monthStart ? bStart : monthStart;
+        const effectiveLimit = bEnd < reportCapDate ? bEnd : reportCapDate;
+        const effectiveEnd = effectiveLimit; 
+
+        if (effectiveStart <= effectiveEnd) {
+            const diffTime = effectiveEnd.getTime() - effectiveStart.getTime();
+            const daysOccupied = Math.round(diffTime / (1000 * 60 * 60 * 24)) + 1;
+            const totalFee = Math.floor(dailyRate * daysOccupied);
+            const netFee = isFree ? 0 : totalFee;
+
+            grandTotalRevenue += totalFee;
+            grandNetRevenue += netFee;
 
             monthlyDetails.push({
                 ...b,
-                effective_start_date: financials.displayStart, // Use capped date
-                effective_end_date: financials.displayEnd,     // Use capped date
-                display_days: financials.days,
-                display_total: financials.total,
-                display_net: financials.net
+                effective_start_date: effectiveStart,
+                effective_end_date: effectiveEnd,
+                display_days: daysOccupied,
+                display_total: totalFee,
+                display_net: netFee
             });
-        }
 
-        // --- 2. MOVEMENT LOGIC (Financials included) ---
-        // Recalculate or reuse financials? Reuse if valid, else 0
-        const mFin = financials || { total: 0, net: 0 };
-        
-        // A. Beginning Balance
-        if (bStart < startDate && bEnd >= startDate) {
-            beginning.count++;
-            beginning.total += mFin.total;
-            beginning.net += mFin.net;
-        }
-
-        // B. New Booking
-        if (bStart >= startDate && bStart <= endDate) {
-            newBook.count++;
-            newBook.total += mFin.total;
-            newBook.net += mFin.net;
-
-            newBookingsDetails.push({
-                employee_code: b.employees?.employee_code || '-',
-                full_name: b.employees?.full_name || 'Unknown',
-                start_date: b.booking_start, // Keep original start for New Booking report
-                end_date: b.booking_end,
-                lot_id: b.parking_spots?.lot_id || '-',
-                license_plate: b.license_plate_used || b.employees?.license_plate || '-'
-            });
-        }
-
-        // C. Expired Booking
-        if (bEnd >= startDate && bEnd <= endDate) {
-            expired.count++;
-            expired.total += mFin.total;
-            expired.net += mFin.net;
-        }
-
-        // D. Ending Balance
-        if (bStart <= endDate && bEnd >= endDate) {
-             ending.count++;
-             ending.total += mFin.total;
-             ending.net += mFin.net;
-
-             if (b.parking_spots?.spot_type === 'Reserved (Paid) Parking') {
-                 occupiedReservedCount++;
-             }
+            // Count for Occupancy (Active at Cap Date)
+            if (bEnd >= reportCapDate && b.parking_spots?.spot_type === 'Reserved (Paid) Parking') {
+                occupiedReservedCount++;
+            }
         }
     });
 
-    // --- PARKING INVENTORY ---
+    // --- C. ENDING BALANCE (Calculated) ---
+    // Formula: Beg + New + Expired (Expired is negative)
+    const end = {
+        count: beg.count + newB.count - exp.count, // Count is arithmetic
+        total: beg.total + newB.total + exp.total, // Math adds negative number
+        net: beg.net + newB.net + exp.net
+    };
+
+    // --- D. INVENTORY ---
     const inventory = {};
     let grandTotalSpots = 0;
     let totalReservedSpots = 0; 
@@ -208,11 +228,8 @@ export default function Home() {
     allSpots?.forEach(spot => {
         grandTotalSpots++;
         if (spot.spot_type === 'Reserved (Paid) Parking') totalReservedSpots++;
-
         const key = `${spot.zone_text}-${spot.spot_type}`; 
-        if (!inventory[key]) {
-            inventory[key] = { zone: spot.zone_text, type: spot.spot_type, count: 0 };
-        }
+        if (!inventory[key]) inventory[key] = { zone: spot.zone_text, type: spot.spot_type, count: 0 };
         inventory[key].count++;
     });
     
@@ -220,15 +237,15 @@ export default function Home() {
     const occupancyRate = totalReservedSpots > 0 ? (occupiedReservedCount / totalReservedSpots) * 100 : 0;
 
     return {
-        monthName: startDate.toLocaleString('default', { month: 'long' }),
+        monthName: monthStart.toLocaleString('default', { month: 'long' }),
         year: year,
         monthlyDetails,
         newBookingsDetails,
         movement: [
-            { label: 'Beginning Balance', ...beginning },
-            { label: 'New Booking', ...newBook },
-            { label: 'Expired Booking', ...expired },
-            { label: 'Ending Balance', ...ending },
+            { label: 'Beginning Balance', ...beg },
+            { label: 'New Booking', ...newB },
+            { label: 'Expired Booking (Missed Rev)', ...exp },
+            { label: 'Ending Balance', ...end },
         ],
         inventory: sortedInventory,
         grandTotalSpots,
@@ -247,39 +264,35 @@ export default function Home() {
     if (!reportData) return;
     const wb = XLSX.utils.book_new();
 
-    // Sheet 1: Tenant Details (Using EFFECTIVE DATES)
     const ws1Data = reportData.monthlyDetails.map(item => ({
         "Lot ID": item.parking_spots?.lot_id,
         "Employee Code": item.employees?.employee_code,
         "Name": item.employees?.full_name,
-        // CHANGED: Use effective dates
-        "Start Date": new Date(item.effective_start_date).toLocaleDateString(),
-        "End Date": new Date(item.effective_end_date).toLocaleDateString(),
-        "Days Occupied": item.display_days,
+        "Start Date (Effective)": formatThaiDate(item.effective_start_date),
+        "End Date (Effective)": formatThaiDate(item.effective_end_date),
+        "Days": item.display_days,
         "Total Fee": item.display_total,
         "Net Fee": item.display_net
     }));
     const ws1 = XLSX.utils.json_to_sheet(ws1Data);
     XLSX.utils.book_append_sheet(wb, ws1, "Tenant Details");
 
-    // Sheet 2: Summary
     const ws2Data = reportData.movement.map(m => ({
         "Description": m.label, 
-        "Count (Units)": m.count, 
-        "Total Parking Fee (THB)": m.total, 
-        "Net Parking Fee (THB)": m.net 
+        "Count": m.count, 
+        "Total Fee": m.total, 
+        "Net Fee": m.net 
     }));
     const ws2 = XLSX.utils.json_to_sheet(ws2Data);
     XLSX.utils.book_append_sheet(wb, ws2, "Monthly Summary");
 
-    // Sheet 3: New Bookings
     const ws3Data = reportData.newBookingsDetails.map(item => ({
-        "Employee Code": item.employee_code,
-        "Full Name": item.full_name,
-        "Start Date": new Date(item.start_date).toLocaleDateString(),
-        "End Date": new Date(item.end_date).toLocaleDateString(),
-        "Lot ID": item.lot_id,
-        "License Plate": item.license_plate
+        "Code": item.employees?.employee_code,
+        "Name": item.employees?.full_name,
+        "Start": formatThaiDate(item.start_date),
+        "End": formatThaiDate(item.end_date),
+        "Lot": item.parking_spots?.lot_id,
+        "Plate": item.license_plate_used || item.employees?.license_plate
     }));
     const ws3 = XLSX.utils.json_to_sheet(ws3Data);
     XLSX.utils.book_append_sheet(wb, ws3, "New Bookings");
@@ -290,22 +303,19 @@ export default function Home() {
     saveAs(data, fileName);
   };
 
-  // --- EXPORT 2: PDF (Fixed) ---
+  // --- EXPORT 2: PDF ---
   const exportPDF = () => {
     if (!reportData) return;
-
     try {
         const doc = new jsPDF();
         
         doc.setFontSize(18);
         doc.text(`Turbo Parking Report: ${reportData.monthName} ${reportData.year}`, 14, 20);
         doc.setFontSize(10);
-        doc.text(`Generated on: ${new Date().toLocaleString()}`, 14, 28);
+        doc.text(`Generated on: ${new Date().toLocaleString('en-GB', {timeZone: 'Asia/Bangkok'})}`, 14, 28);
 
-        // Table 1: Summary
         doc.setFontSize(14);
         doc.text("3.2 Monthly Booking Summary", 14, 40);
-        
         autoTable(doc, {
             startY: 45,
             head: [['Description', 'Count', 'Total Fee', 'Net Fee']],
@@ -316,16 +326,18 @@ export default function Home() {
             headStyles: { fillColor: [0, 45, 114] }
         });
 
-        // Table 2: New Bookings
         let finalY = (doc.lastAutoTable && doc.lastAutoTable.finalY) || 50; 
-        
         doc.text("3.3 New Booking Details", 14, finalY + 15);
-        
         autoTable(doc, {
             startY: finalY + 20,
             head: [['Code', 'Name', 'Start', 'End', 'Lot', 'Plate']],
             body: reportData.newBookingsDetails.map(i => [
-                i.employee_code, i.full_name, new Date(i.start_date).toLocaleDateString(), new Date(i.end_date).toLocaleDateString(), i.lot_id, i.license_plate
+                i.employees?.employee_code, 
+                i.employees?.full_name, 
+                formatThaiDate(i.start_date), 
+                formatThaiDate(i.end_date), 
+                i.parking_spots?.lot_id, 
+                i.license_plate_used || i.employees?.license_plate
             ]),
             theme: 'striped',
             headStyles: { fillColor: [250, 71, 134] }
@@ -333,8 +345,7 @@ export default function Home() {
         
         doc.save(`TurboParking_${reportData.monthName}.pdf`);
     } catch (err) {
-        console.error("PDF Generation Error:", err);
-        alert("Failed to export PDF. Please ensure all data is loaded.");
+        console.error("PDF Error:", err);
     }
   };
 
@@ -342,8 +353,6 @@ export default function Home() {
 
   return (
     <div className="space-y-6 animate-in fade-in">
-      
-      {/* HEADER & FILTERS */}
       <div className="flex justify-between items-center">
         <div>
            <h1 className="text-2xl font-bold text-[#002D72]">Reporting Center</h1>
@@ -351,10 +360,8 @@ export default function Home() {
               <Activity size={16} className="text-green-500"/> System Online
            </p>
         </div>
-
         <div className="flex gap-2 items-center bg-white p-2 rounded-xl border shadow-sm">
             <Calendar size={18} className="text-gray-400 ml-2"/>
-            
             <select 
                 value={selectedYear} 
                 onChange={(e) => setSelectedYear(parseInt(e.target.value))}
@@ -362,9 +369,7 @@ export default function Home() {
             >
                 {[2024, 2025, 2026].map(y => <option key={y} value={y}>{y}</option>)}
             </select>
-
             <span className="text-gray-300">|</span>
-
             <select 
                 value={selectedMonth} 
                 onChange={(e) => setSelectedMonth(parseInt(e.target.value))}
@@ -384,7 +389,6 @@ export default function Home() {
         </div>
       </div>
 
-      {/* TABS */}
       <div className="grid grid-cols-3 bg-white p-1 rounded-xl border border-gray-200 shadow-sm">
         {[
             { id: 1, label: 'Booking Transactions', icon: Activity },
@@ -406,7 +410,6 @@ export default function Home() {
         ))}
       </div>
 
-      {/* --- TAB 1: BOOKING TRANSACTIONS --- */}
       {activeTab === 1 && (
          <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4">
             <Card className="p-6">
@@ -425,8 +428,12 @@ export default function Home() {
                             <tr key={i} className="border-b hover:bg-gray-50">
                                 <td className="py-3 px-4 font-medium text-gray-700">{row.label}</td>
                                 <td className="py-3 px-4 text-center font-bold">{row.count}</td>
-                                <td className="py-3 px-4 text-right font-mono">{row.total.toLocaleString()}</td>
-                                <td className="py-3 px-4 text-right font-mono font-bold text-green-700">{row.net.toLocaleString()}</td>
+                                <td className={`py-3 px-4 text-right font-mono ${row.total < 0 ? 'text-red-500' : ''}`}>
+                                    {row.total.toLocaleString()}
+                                </td>
+                                <td className={`py-3 px-4 text-right font-mono font-bold ${row.net < 0 ? 'text-red-500' : 'text-green-700'}`}>
+                                    {row.net.toLocaleString()}
+                                </td>
                             </tr>
                         ))}
                     </tbody>
@@ -436,32 +443,23 @@ export default function Home() {
             <div className="grid grid-cols-3 gap-6">
                 <Card className="p-6 border-l-4 border-l-blue-500">
                     <p className="text-gray-500 text-sm">Total Revenue</p>
-                    <h3 className="text-2xl font-bold text-[#002D72] mt-1">
-                        ฿ {reportData.financials.revenue.toLocaleString()}
-                    </h3>
+                    <h3 className="text-2xl font-bold text-[#002D72] mt-1">฿ {reportData.financials.revenue.toLocaleString()}</h3>
                 </Card>
                 <Card className="p-6 border-l-4 border-l-green-500">
                     <p className="text-gray-500 text-sm">Net Parking Fee</p>
-                    <h3 className="text-2xl font-bold text-green-700 mt-1">
-                        ฿ {reportData.financials.net.toLocaleString()}
-                    </h3>
+                    <h3 className="text-2xl font-bold text-green-700 mt-1">฿ {reportData.financials.net.toLocaleString()}</h3>
                 </Card>
                 <Card className="p-6 border-l-4 border-l-[#FA4786]">
                     <p className="text-gray-500 text-sm">Occupancy (Reserved Only)</p>
                     <div className="flex items-baseline gap-2 mt-1">
-                        <h3 className="text-2xl font-bold text-[#FA4786]">
-                            {reportData.financials.occupancy.toFixed(1)}%
-                        </h3>
-                        <span className="text-xs text-gray-400">
-                            ({reportData.financials.occupiedCount}/{reportData.financials.totalReservedSpots})
-                        </span>
+                        <h3 className="text-2xl font-bold text-[#FA4786]">{reportData.financials.occupancy.toFixed(1)}%</h3>
+                        <span className="text-xs text-gray-400">({reportData.financials.occupiedCount}/{reportData.financials.totalReservedSpots})</span>
                     </div>
                 </Card>
             </div>
          </div>
       )}
 
-      {/* --- TAB 2: PARKING SUMMARY --- */}
       {activeTab === 2 && (
           <Card className="p-6 animate-in fade-in slide-in-from-bottom-4">
             <h3 className="text-lg font-bold text-[#002D72] mb-4">2. Parking Summary</h3>
@@ -492,19 +490,13 @@ export default function Home() {
           </Card>
       )}
 
-      {/* --- TAB 3: MONTHLY TENANT REPORT --- */}
       {activeTab === 3 && (
         <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4">
             <div className="flex justify-end gap-3">
-                 <button onClick={exportExcel} className="flex items-center gap-2 bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 shadow-sm transition">
-                    <FileSpreadsheet size={18} /> Export Excel (3 Sheets)
-                 </button>
-                 <button onClick={exportPDF} className="flex items-center gap-2 bg-red-600 text-white px-4 py-2 rounded-lg hover:bg-red-700 shadow-sm transition">
-                    <FileText size={18} /> Export PDF
-                 </button>
+                 <button onClick={exportExcel} className="flex items-center gap-2 bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 shadow-sm transition"><FileSpreadsheet size={18} /> Export Excel (3 Sheets)</button>
+                 <button onClick={exportPDF} className="flex items-center gap-2 bg-red-600 text-white px-4 py-2 rounded-lg hover:bg-red-700 shadow-sm transition"><FileText size={18} /> Export PDF</button>
             </div>
 
-            {/* 3.1 Tenant Detail - USING EFFECTIVE DATES */}
             <Card className="p-6">
                 <h3 className="text-lg font-bold text-[#002D72] mb-4">3.1 Monthly Tenant Detail Report</h3>
                 <div className="overflow-x-auto">
@@ -514,7 +506,6 @@ export default function Home() {
                                 <th className="py-3 px-4">Lot ID</th>
                                 <th className="py-3 px-4">Emp Code</th>
                                 <th className="py-3 px-4">Name</th>
-                                {/* Changed header to clarify */}
                                 <th className="py-3 px-4">Start (Effective)</th>
                                 <th className="py-3 px-4">End (Effective)</th>
                                 <th className="py-3 px-4 text-right">Total Fee</th>
@@ -528,9 +519,8 @@ export default function Home() {
                                     <td className="py-3 px-4 font-bold">{row.parking_spots?.lot_id}</td>
                                     <td className="py-3 px-4 font-mono">{row.employees?.employee_code}</td>
                                     <td className="py-3 px-4">{row.employees?.full_name}</td>
-                                    {/* USING EFFECTIVE DATES */}
-                                    <td className="py-3 px-4 text-gray-500">{new Date(row.effective_start_date).toLocaleDateString()}</td>
-                                    <td className="py-3 px-4 text-gray-500">{new Date(row.effective_end_date).toLocaleDateString()}</td>
+                                    <td className="py-3 px-4 text-gray-500">{formatThaiDate(row.effective_start_date)}</td>
+                                    <td className="py-3 px-4 text-gray-500">{formatThaiDate(row.effective_end_date)}</td>
                                     <td className="py-3 px-4 text-right text-gray-400">{row.display_total.toLocaleString()}</td>
                                     <td className="py-3 px-4 text-right font-bold text-[#002D72] bg-blue-50">{row.display_net.toLocaleString()}</td>
                                 </tr>
@@ -556,8 +546,8 @@ export default function Home() {
                             <tr key={i}>
                                 <td className="py-3 px-4 font-medium">{m.label}</td>
                                 <td className="py-3 px-4 text-center font-bold">{m.count}</td>
-                                <td className="py-3 px-4 text-right">{m.total.toLocaleString()}</td>
-                                <td className="py-3 px-4 text-right font-bold text-green-700">{m.net.toLocaleString()}</td>
+                                <td className={`py-3 px-4 text-right ${m.total < 0 ? 'text-red-500' : ''}`}>{m.total.toLocaleString()}</td>
+                                <td className={`py-3 px-4 text-right font-bold ${m.net < 0 ? 'text-red-500' : 'text-green-700'}`}>{m.net.toLocaleString()}</td>
                             </tr>
                         ))}
                     </tbody>
@@ -582,12 +572,12 @@ export default function Home() {
                             {reportData.newBookingsDetails.length === 0 ? <tr><td colSpan="6" className="p-4 text-center text-gray-400">No new bookings this month.</td></tr> :
                              reportData.newBookingsDetails.map((row, i) => (
                                 <tr key={i} className="hover:bg-gray-50">
-                                    <td className="py-3 px-4 font-mono text-blue-600">{row.employee_code}</td>
-                                    <td className="py-3 px-4 font-medium">{row.full_name}</td>
-                                    <td className="py-3 px-4">{new Date(row.start_date).toLocaleDateString()}</td>
-                                    <td className="py-3 px-4">{new Date(row.end_date).toLocaleDateString()}</td>
-                                    <td className="py-3 px-4 font-bold">{row.lot_id}</td>
-                                    <td className="py-3 px-4 text-gray-500">{row.license_plate}</td>
+                                    <td className="py-3 px-4 font-mono text-blue-600">{row.employees?.employee_code}</td>
+                                    <td className="py-3 px-4 font-medium">{row.employees?.full_name}</td>
+                                    <td className="py-3 px-4">{formatThaiDate(row.start_date)}</td>
+                                    <td className="py-3 px-4">{formatThaiDate(row.end_date)}</td>
+                                    <td className="py-3 px-4 font-bold">{row.parking_spots?.lot_id}</td>
+                                    <td className="py-3 px-4 text-gray-500">{row.license_plate_used || row.employees?.license_plate}</td>
                                 </tr>
                              ))}
                         </tbody>
