@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
-import Papa from 'papaparse'; // Library to read CSV
+import Papa from 'papaparse'; // Library to read/write CSV
 import { Card, Badge } from '../components/UI';
-import { UploadCloud, FileSpreadsheet, Download, AlertTriangle, FileText, CheckCircle } from 'lucide-react';
+import { UploadCloud, FileSpreadsheet, Download, AlertTriangle, FileText } from 'lucide-react';
 
 export default function BondHolder() {
   const [data, setData] = useState([]);
@@ -35,9 +35,8 @@ export default function BondHolder() {
     const file = event.target.files[0];
     if (!file) return;
 
-    // Confirm Action
     if (!window.confirm("⚠️ WARNING: This will DELETE ALL current Bond Holder data and replace it with this file.\n\nAre you sure?")) {
-        event.target.value = null; // Reset input
+        event.target.value = null; 
         return;
     }
 
@@ -50,7 +49,7 @@ export default function BondHolder() {
         try {
           const rawRows = results.data;
           
-          // A. Validate Columns
+          // Validate Columns
           const requiredCols = ['id', 'full_name', 'employee_code', 'tier'];
           const fileCols = results.meta.fields;
           const missing = requiredCols.filter(col => !fileCols.includes(col));
@@ -59,9 +58,8 @@ export default function BondHolder() {
             throw new Error(`Missing columns: ${missing.join(', ')}. Please check the guide.`);
           }
 
-          // B. Process Data (Clean & Format)
+          // Process Data
           const formattedRows = rawRows.map(row => {
-            // Clean Employee Code: "532" -> "00000532"
             let cleanCode = row.employee_code ? String(row.employee_code).trim() : '';
             cleanCode = cleanCode.padStart(8, '0');
 
@@ -70,12 +68,11 @@ export default function BondHolder() {
                 full_name: row.full_name,
                 employee_code: cleanCode,
                 tier: parseInt(row.tier) || 0,
-                created_at: new Date().toISOString() // Add Timestamp
+                created_at: new Date().toISOString()
             };
           });
 
-          // C. DELETE ALL EXISTING DATA
-          // (We delete everything where ID is not empty string, effectively all rows)
+          // Delete Old Data
           const { error: deleteError } = await supabase
             .from('bond_holders')
             .delete()
@@ -83,7 +80,7 @@ export default function BondHolder() {
           
           if (deleteError) throw deleteError;
 
-          // D. INSERT NEW DATA
+          // Insert New Data
           const { error: insertError } = await supabase
             .from('bond_holders')
             .insert(formattedRows);
@@ -91,13 +88,13 @@ export default function BondHolder() {
           if (insertError) throw insertError;
 
           alert(`Successfully replaced database with ${formattedRows.length} records!`);
-          fetchData(); // Refresh Table
+          fetchData(); 
 
         } catch (error) {
           alert("Upload Failed: " + error.message);
         } finally {
           setUploading(false);
-          event.target.value = null; // Reset input
+          event.target.value = null; 
         }
       }
     });
@@ -107,22 +104,21 @@ export default function BondHolder() {
   const handleDownload = () => {
     if (data.length === 0) return alert("No data to download.");
     
-    // Convert JSON to CSV
-    const csv = Papa.unparse(data.map(item => ({
-        id: item.id,
-        full_name: item.full_name,
-        employee_code: item.employee_code,
-        tier: item.tier,
-        created_at: item.created_at
-    })));
+    // Convert to CSV with Specific Headers
+    const csvData = data.map(item => ({
+        "ID": item.id,
+        "Full Name": item.full_name,
+        "Employee_Code": item.employee_code,
+        "Tier": item.tier
+    }));
 
-    // Trigger Download
+    const csv = Papa.unparse(csvData);
+
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const link = document.createElement("a");
     const url = URL.createObjectURL(blob);
     link.setAttribute("href", url);
-    link.setAttribute("download", `bond_holders_${new Date().toISOString().slice(0,10)}.csv`);
-    link.style.visibility = 'hidden';
+    link.setAttribute("download", `bond_holders_export_${new Date().toISOString().slice(0,10)}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -132,17 +128,19 @@ export default function BondHolder() {
     <div className="space-y-6 animate-in fade-in duration-500 h-[calc(100vh-140px)] flex flex-col">
        <div className="flex justify-between items-center">
          <h2 className="text-2xl font-bold text-[#002D72]">Bond Holder Management</h2>
+         
+         {/* EXPORT BUTTON (Only shows if data exists) */}
          {data.length > 0 && (
             <button 
                 onClick={handleDownload}
                 className="flex items-center gap-2 text-[#002D72] hover:bg-blue-50 px-4 py-2 rounded-xl transition border border-blue-100 font-medium"
             >
-                <Download size={18}/> Download CSV
+                <Download size={18}/> Export CSV
             </button>
          )}
        </div>
 
-       {/* INSTRUCTION CARD */}
+       {/* GUIDE */}
        <div className="bg-blue-50 border border-blue-100 rounded-xl p-4 flex gap-4 items-start">
             <div className="bg-white p-2 rounded-full text-blue-600 shadow-sm mt-1">
                 <FileText size={20} />
@@ -164,9 +162,7 @@ export default function BondHolder() {
             </div>
        </div>
        
-       {/* MAIN CONTENT: UPLOAD OR TABLE */}
        <div className="flex-1 flex flex-col gap-6">
-         
          {/* Upload Area */}
          <div className="relative group">
             <input 
@@ -190,7 +186,7 @@ export default function BondHolder() {
             </div>
          </div>
 
-         {/* DATA TABLE */}
+         {/* TABLE */}
          <Card className="flex-1 overflow-hidden flex flex-col">
             {loading ? <div className="p-12 text-center text-gray-400">Loading data...</div> : (
                 <div className="overflow-auto flex-1">
@@ -199,7 +195,8 @@ export default function BondHolder() {
                             <tr>
                                 <th className="py-3 px-4">ID</th>
                                 <th className="py-3 px-4">Full Name</th>
-                                <th className="py-3 px-4">Code</th>
+                                {/* UPDATED HEADER NAME */}
+                                <th className="py-3 px-4">Employee Code</th> 
                                 <th className="py-3 px-4">Tier</th>
                                 <th className="py-3 px-4">Uploaded At</th>
                             </tr>

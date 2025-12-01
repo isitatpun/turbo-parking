@@ -164,6 +164,9 @@ export default function Booking() {
     }
   };
 
+  // Helper to check permission
+  const canEdit = role === 'admin' || role === 'master_admin';
+
   return (
     <div className="space-y-6 animate-in fade-in duration-500">
       
@@ -286,7 +289,7 @@ export default function Booking() {
 
                             {/* --- 3. ACTION BUTTON (HIDDEN IF NOT ADMIN) --- */}
                             <td className="py-3 px-4 text-center">
-                                {role === 'admin' ? (
+                                {canEdit ? (
                                     <button 
                                         onClick={() => openBookingModal(spot)}
                                         className="p-2 rounded-lg text-gray-500 hover:text-[#FA4786] hover:bg-pink-50 border border-transparent hover:border-pink-200 transition"
