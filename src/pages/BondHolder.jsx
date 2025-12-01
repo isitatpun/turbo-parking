@@ -19,7 +19,7 @@ export default function BondHolder() {
       const { data: bonds, error } = await supabase
         .from('bond_holders')
         .select('*')
-        .order('id', { ascending: true }); // Ensure consistent ordering
+        .order('id', { ascending: true });
       
       if (error) throw error;
       setData(bonds || []);
@@ -44,7 +44,10 @@ export default function BondHolder() {
 
     Papa.parse(file, {
       header: true,
-      skipEmptyLines: true, // This helps, but manual filtering is safer
+      skipEmptyLines: true,
+      // --- THE FIX: Clean invisible characters from Excel headers ---
+      transformHeader: (header) => header.replace(/[\ufeff|\u00a0]/g, "").trim(),
+      
       complete: async (results) => {
         try {
           const rawRows = results.data;
@@ -56,29 +59,28 @@ export default function BondHolder() {
           const missing = requiredCols.filter(col => !fileCols.includes(col));
           
           if (missing.length > 0) {
-            throw new Error(`Missing columns: ${missing.join(', ')}. Please check the CSV file.`);
+            throw new Error(`Missing columns: ${missing.join(', ')}. Check your CSV headers.`);
           }
 
           if (rawRows.length === 0) {
             throw new Error("The file is empty.");
           }
 
-          // 2.2 Process & CLEAN Data (Crucial Step)
-          // We filter out any row where 'id' is missing or empty string to prevent the constraint error.
-          const validRows = rawRows.filter(row => row.id && row.id.trim() !== '');
+          // 2.2 Clean and Format Data
+          // Filter out rows where ID is empty/null to avoid database errors
+          const validRows = rawRows.filter(row => row.id && String(row.id).trim() !== '');
 
           if (validRows.length === 0) {
-            throw new Error("No valid data rows found (IDs were empty).");
+            throw new Error("No valid rows found. Please check that the 'id' column is not empty.");
           }
 
           const formattedRows = validRows.map(row => {
             // Safe string conversion
             let cleanCode = row.employee_code ? String(row.employee_code).trim() : '';
-            // Pad to 8 digits (e.g., "123" -> "00000123")
             cleanCode = cleanCode.padStart(8, '0');
 
             return {
-                id: String(row.id).trim(), // Force ID to be a string
+                id: String(row.id).trim(), 
                 full_name: row.full_name?.trim(),
                 employee_code: cleanCode,
                 tier: parseInt(row.tier) || 0,
@@ -86,12 +88,14 @@ export default function BondHolder() {
             };
           });
 
+          console.log("Attempting to upload:", formattedRows); // Debugging log
+
           // 2.3 STEP A: WIPE (Delete Old Data)
-          // Since ID is TEXT, we use .neq (Not Equal) to a dummy value to select all.
+          // We use a filter that matches everything to ensure a full wipe.
           const { error: deleteError } = await supabase
             .from('bond_holders')
             .delete()
-            .neq('id', '_DELETE_ALL_PLACEHOLDER_'); // This effectively selects everything not matching this weird string
+            .neq('id', '_______'); // Selects everything that isn't this random string
           
           if (deleteError) throw deleteError;
 
