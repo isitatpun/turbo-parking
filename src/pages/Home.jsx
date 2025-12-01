@@ -20,17 +20,28 @@ export default function Home() {
   
   // --- DATE FILTER STATE ---
   const today = new Date();
-  const currentYear = today.getFullYear();
-  const currentMonth = today.getMonth(); 
+  const currentYear = today.getFullYear(); // 2025
+  const currentMonth = today.getMonth();   // 11 (December)
   
   const [selectedYear, setSelectedYear] = useState(currentYear);
   const [selectedMonth, setSelectedMonth] = useState(currentMonth);
 
+  // --- GENERATE YEARS DYNAMICALLY (From 2024 to Current Year) ---
+  const startYear = 2024;
+  const years = [];
+  for (let y = startYear; y <= currentYear; y++) {
+      years.push(y);
+  }
+
+  // Safety Check: If selected time is in future, reset to now
   useEffect(() => {
+    if (selectedYear > currentYear) {
+        setSelectedYear(currentYear);
+    }
     if (selectedYear === currentYear && selectedMonth > currentMonth) {
         setSelectedMonth(currentMonth);
     }
-  }, [selectedYear]);
+  }, [selectedYear, currentYear, currentMonth]);
 
   useEffect(() => {
     fetchReportData();
@@ -89,31 +100,23 @@ export default function Home() {
     const monthEnd = new Date(year, month + 1, 0); 
     const daysInMonth = monthEnd.getDate();
 
-    // Bond Holder Check
     const isFreeParking = (empCode) => {
         if (!empCode) return false;
         const holder = bondHolders?.find(b => b.employee_code === empCode);
         return holder && (holder.tier === 1 || holder.tier === 2);
     };
 
-    // --- 1. MOVEMENT CALCULATION (Summary Table) ---
-    // Variables for Movement
     let beg = { count: 0, total: 0, net: 0 };
-    let newB = { count: 0, total: 0, net: 0 }; // "New"
-    let exp = { count: 0, total: 0, net: 0 }; // "Expired"
+    let newB = { count: 0, total: 0, net: 0 }; 
+    let exp = { count: 0, total: 0, net: 0 }; 
     
-    // Arrays for Lists
     const monthlyDetails = [];
     const newBookingsDetails = []; 
 
-    // Financial Totals for Detail Report
     let grandTotalRevenue = 0;
     let grandNetRevenue = 0;
-    
-    // Occupancy
     let occupiedReservedCount = 0;
     
-    // Report Cap Date (For Detail Report "Today" Cap)
     const todayMidnight = toMidnight(new Date());
     let reportCapDate = monthEnd;
     if (monthEnd > todayMidnight) {
@@ -128,35 +131,27 @@ export default function Home() {
         const dailyRate = price / daysInMonth;
         const isFree = isFreeParking(b.employees?.employee_code);
 
-        // --- A. MOVEMENT LOGIC (Specific Rules) ---
-        
-        // 1. BEGINNING BALANCE: Active BEFORE month starts
-        // Logic: Calculate FULL MONTH potential revenue (as if it stayed the whole month)
+        // --- A. MOVEMENT LOGIC ---
+        // 1. BEGINNING BALANCE
         if (bStart < monthStart && bEnd >= monthStart) {
             beg.count++;
-            const fee = price; // Full Month Price
+            const fee = price; 
             const net = isFree ? 0 : fee;
-            
             beg.total += fee;
             beg.net += net;
         }
 
-        // 2. NEW BOOKING: Starts WITHIN this month
-        // Logic: Calculate Pro-rated from Start -> MonthEnd
+        // 2. NEW BOOKING
         if (bStart >= monthStart && bStart <= monthEnd) {
             newB.count++;
-            
-            // Days from Start to MonthEnd (Inclusive)
             const diffTime = monthEnd.getTime() - bStart.getTime();
             const daysActive = Math.round(diffTime / (1000 * 60 * 60 * 24)) + 1;
-            
             const fee = Math.floor(dailyRate * daysActive);
             const net = isFree ? 0 : fee;
 
             newB.total += fee;
             newB.net += net;
 
-            // Add to New Booking List (3.3)
             newBookingsDetails.push({
                 ...b,
                 start_date: b.booking_start,
@@ -164,25 +159,19 @@ export default function Home() {
             });
         }
 
-        // 3. EXPIRED BOOKING: Ends WITHIN this month (before month end)
-        // Logic: Calculate Revenue LOST (Negative)
-        // Formula: Price * (DaysRemaining / DaysInMonth) * -1
+        // 3. EXPIRED BOOKING
         if (bEnd >= monthStart && bEnd < monthEnd) {
             exp.count++;
-
-            // Days Remaining AFTER booking ends (Non-inclusive of end date)
-            // e.g. Ends 20th. Lost 21st to 30th (10 days)
             const diffTime = monthEnd.getTime() - bEnd.getTime();
-            const daysLost = Math.round(diffTime / (1000 * 60 * 60 * 24)); // No +1 because we count days AFTER
-
-            const lostFee = Math.floor(dailyRate * daysLost) * -1; // Negative
+            const daysLost = Math.round(diffTime / (1000 * 60 * 60 * 24)); 
+            const lostFee = Math.floor(dailyRate * daysLost) * -1;
             const lostNet = isFree ? 0 : lostFee;
 
             exp.total += lostFee;
             exp.net += lostNet;
         }
 
-        // --- B. DETAIL REPORT LOGIC (Standard Realized Revenue) ---
+        // --- B. DETAIL REPORT LOGIC ---
         const effectiveStart = bStart > monthStart ? bStart : monthStart;
         const effectiveLimit = bEnd < reportCapDate ? bEnd : reportCapDate;
         const effectiveEnd = effectiveLimit; 
@@ -205,22 +194,18 @@ export default function Home() {
                 display_net: netFee
             });
 
-            // Count for Occupancy (Active at Cap Date)
             if (bEnd >= reportCapDate && b.parking_spots?.spot_type === 'Reserved (Paid) Parking') {
                 occupiedReservedCount++;
             }
         }
     });
 
-    // --- C. ENDING BALANCE (Calculated) ---
-    // Formula: Beg + New + Expired (Expired is negative)
     const end = {
-        count: beg.count + newB.count - exp.count, // Count is arithmetic
-        total: beg.total + newB.total + exp.total, // Math adds negative number
+        count: beg.count + newB.count - exp.count, 
+        total: beg.total + newB.total + exp.total, 
         net: beg.net + newB.net + exp.net
     };
 
-    // --- D. INVENTORY ---
     const inventory = {};
     let grandTotalSpots = 0;
     let totalReservedSpots = 0; 
@@ -362,14 +347,19 @@ export default function Home() {
         </div>
         <div className="flex gap-2 items-center bg-white p-2 rounded-xl border shadow-sm">
             <Calendar size={18} className="text-gray-400 ml-2"/>
+            
+            {/* FIXED YEAR SELECTOR: Capped at currentYear */}
             <select 
                 value={selectedYear} 
                 onChange={(e) => setSelectedYear(parseInt(e.target.value))}
                 className="bg-transparent font-medium text-gray-700 outline-none cursor-pointer"
             >
-                {[2024, 2025, 2026].map(y => <option key={y} value={y}>{y}</option>)}
+                {years.map(y => <option key={y} value={y}>{y}</option>)}
             </select>
+
             <span className="text-gray-300">|</span>
+
+            {/* FIXED MONTH SELECTOR: Future months disabled */}
             <select 
                 value={selectedMonth} 
                 onChange={(e) => setSelectedMonth(parseInt(e.target.value))}
