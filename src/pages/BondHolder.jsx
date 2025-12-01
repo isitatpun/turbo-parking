@@ -19,13 +19,12 @@ export default function BondHolder() {
       const { data: bonds, error } = await supabase
         .from('bond_holders')
         .select('*')
-        .order('id');
+        .order('id', { ascending: true }); // Ensure consistent ordering
       
       if (error) throw error;
       setData(bonds || []);
     } catch (error) {
       console.error("Error loading data:", error);
-      alert("Error loading data: " + error.message);
     } finally {
       setLoading(false);
     }
@@ -45,53 +44,54 @@ export default function BondHolder() {
 
     Papa.parse(file, {
       header: true,
-      skipEmptyLines: true,
+      skipEmptyLines: true, // This helps, but manual filtering is safer
       complete: async (results) => {
         try {
           const rawRows = results.data;
           
           // 2.1 Validate Columns
           const requiredCols = ['id', 'full_name', 'employee_code', 'tier'];
-          const fileCols = results.meta.fields;
+          const fileCols = results.meta.fields || [];
           
-          // Check if fileCols is undefined (sometimes happens if file is empty)
-          if (!fileCols) throw new Error("Could not read CSV headers.");
-
           const missing = requiredCols.filter(col => !fileCols.includes(col));
           
           if (missing.length > 0) {
-            throw new Error(`Missing columns: ${missing.join(', ')}. Please check the guide.`);
+            throw new Error(`Missing columns: ${missing.join(', ')}. Please check the CSV file.`);
           }
 
           if (rawRows.length === 0) {
-            throw new Error("File contains headers but no data rows.");
+            throw new Error("The file is empty.");
           }
 
-          // 2.2 Process Data
-          const formattedRows = rawRows.map(row => {
-            // Safe string conversion before trim
+          // 2.2 Process & CLEAN Data (Crucial Step)
+          // We filter out any row where 'id' is missing or empty string to prevent the constraint error.
+          const validRows = rawRows.filter(row => row.id && row.id.trim() !== '');
+
+          if (validRows.length === 0) {
+            throw new Error("No valid data rows found (IDs were empty).");
+          }
+
+          const formattedRows = validRows.map(row => {
+            // Safe string conversion
             let cleanCode = row.employee_code ? String(row.employee_code).trim() : '';
             // Pad to 8 digits (e.g., "123" -> "00000123")
             cleanCode = cleanCode.padStart(8, '0');
 
             return {
-                id: row.id, // Assuming ID corresponds to the CSV ID
-                full_name: row.full_name,
+                id: String(row.id).trim(), // Force ID to be a string
+                full_name: row.full_name?.trim(),
                 employee_code: cleanCode,
                 tier: parseInt(row.tier) || 0,
-                // Note: We generally don't set created_at manually on insert if the DB defaults it, 
-                // but strictly following your request to keep data structure:
-                created_at: new Date().toISOString() 
+                created_at: new Date().toISOString()
             };
           });
 
           // 2.3 STEP A: WIPE (Delete Old Data)
-          // Fixed: Using .gt('id', 0) assumes ID is numeric. 
-          // If your ID is a string/UUID, change to .neq('id', 0)
+          // Since ID is TEXT, we use .neq (Not Equal) to a dummy value to select all.
           const { error: deleteError } = await supabase
             .from('bond_holders')
             .delete()
-            .gt('id', 0); 
+            .neq('id', '_DELETE_ALL_PLACEHOLDER_'); // This effectively selects everything not matching this weird string
           
           if (deleteError) throw deleteError;
 
@@ -102,11 +102,11 @@ export default function BondHolder() {
 
           if (insertError) throw insertError;
 
-          alert(`Successfully replaced database with ${formattedRows.length} records!`);
+          alert(`Success! Database updated with ${formattedRows.length} records.`);
           fetchData(); 
 
         } catch (error) {
-          console.error("Upload error:", error);
+          console.error("Upload error details:", error);
           alert("Upload Failed: " + error.message);
         } finally {
           setUploading(false);
@@ -120,7 +120,6 @@ export default function BondHolder() {
   const handleDownload = () => {
     if (data.length === 0) return alert("No data to download.");
     
-    // Convert to CSV with Specific Headers
     const csvData = data.map(item => ({
         "id": item.id,
         "full_name": item.full_name,
@@ -129,7 +128,6 @@ export default function BondHolder() {
     }));
 
     const csv = Papa.unparse(csvData);
-
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const link = document.createElement("a");
     const url = URL.createObjectURL(blob);
@@ -145,7 +143,6 @@ export default function BondHolder() {
        <div className="flex justify-between items-center">
          <h2 className="text-2xl font-bold text-[#002D72]">Bond Holder Management</h2>
          
-         {/* EXPORT BUTTON */}
          {data.length > 0 && (
             <button 
                 onClick={handleDownload}
