@@ -21,7 +21,7 @@ export default function Employees() {
     full_name: '', 
     employee_code: '', 
     employee_type: 'General', 
-    privilege: ''
+    // privilege: '' // Removed from state, now calculated
   });
 
   useEffect(() => {
@@ -31,16 +31,44 @@ export default function Employees() {
   const fetchEmployees = async () => {
     try {
       setLoading(true);
-      const { data, error } = await supabase
+
+      // 1. Fetch Active Employees
+      const { data: empData, error: empError } = await supabase
         .from('employees')
         .select('*')
-        .eq('is_active', true) // <--- ONLY SHOW ACTIVE EMPLOYEES
-        .order('id');
+        .eq('is_active', true)
+        .order('id', { ascending: true }); // <--- ORDER BY ID ASC
 
-      if (error) throw error;
-      setEmployees(data || []);
+      if (empError) throw empError;
+
+      // 2. Fetch Bond Holders to lookup Privilege
+      const { data: bondData, error: bondError } = await supabase
+        .from('bond_holders')
+        .select('employee_code, tier');
+
+      if (bondError) throw bondError;
+
+      // 3. Merge Data to Calculate Privilege
+      const mergedData = (empData || []).map(emp => {
+        // Find matching bond holder
+        const bondHolder = bondData.find(b => b.employee_code === emp.employee_code);
+        
+        // Logic: Found ? Tier X : "-"
+        const calculatedPrivilege = bondHolder 
+            ? `Bond Holder Tier ${bondHolder.tier}` 
+            : '-';
+
+        return {
+            ...emp,
+            display_privilege: calculatedPrivilege 
+        };
+      });
+
+      setEmployees(mergedData);
+
     } catch (error) {
       console.error(error);
+      alert("Error loading data: " + error.message);
     } finally {
       setLoading(false);
     }
@@ -80,7 +108,7 @@ export default function Employees() {
   // --- OPEN MODALS ---
   const handleAddClick = () => {
     setEditingId(null);
-    setFormData({ full_name: '', employee_code: '', employee_type: 'General', privilege: '' });
+    setFormData({ full_name: '', employee_code: '', employee_type: 'General' });
     setPlateCount(1);
     setPlateInputs(['']);
     setCodeError('');
@@ -93,7 +121,6 @@ export default function Employees() {
         full_name: emp.full_name,
         employee_code: emp.employee_code,
         employee_type: emp.employee_type,
-        privilege: emp.privilege
     });
     setCodeError('');
 
@@ -105,21 +132,38 @@ export default function Employees() {
 
   // --- SAVE DATA (INSERT OR UPDATE) ---
   const handleSave = async () => {
+    // 1. Basic Format Validation
     if (formData.employee_code.length !== 8) {
         setCodeError("⚠ Cannot save: Employee Code must be 8 digits.");
         return;
     }
 
     try {
+      // 2. DUPLICATE CHECK (Only for new entries)
+      if (!editingId) {
+          const { data: existing, error: checkError } = await supabase
+            .from('employees')
+            .select('id')
+            .eq('employee_code', formData.employee_code);
+
+          if (checkError) throw checkError;
+
+          if (existing && existing.length > 0) {
+              alert(`Error: Employee Code "${formData.employee_code}" already exists in the system.`);
+              return; // Stop execution
+          }
+      }
+
+      // 3. Prepare Data
       const combinedPlates = plateInputs.filter(p => p.trim() !== '').join(', ');
 
       const empData = {
         full_name: formData.full_name,
         employee_code: formData.employee_code,
         employee_type: formData.employee_type,
-        privilege: formData.privilege,
+        // privilege:  We do not save privilege anymore, it is looked up dynamically
         license_plate: combinedPlates,
-        is_active: true // Ensure they are active when saved/edited
+        is_active: true
       };
 
       if (editingId) {
@@ -133,7 +177,7 @@ export default function Employees() {
         const { error } = await supabase.from('employees').insert([{ 
             ...empData, 
             id: generatedID,
-            start_date: new Date() // Set start date on creation
+            start_date: new Date()
         }]);
         if (error) throw error;
         alert("Employee Added!");
@@ -148,21 +192,20 @@ export default function Employees() {
 
   // --- SOFT DELETE FUNCTION ---
   const handleDelete = async (id) => {
-    if(!window.confirm("Are you sure you want to delete this employee? (Soft Delete)")) return;
+    if(!window.confirm("Are you sure you want to delete this employee?")) return;
     try {
-        // INSTEAD OF DELETE(), WE UPDATE
         const { error } = await supabase
             .from('employees')
             .update({ 
-                is_active: false,           // Mark as inactive
-                end_date: new Date()        // Set end date to today
+                is_active: false, 
+                end_date: new Date() 
             })
             .eq('id', id);
 
         if (error) throw error;
         
         alert("Employee deactivated successfully.");
-        fetchEmployees(); // Refresh list to remove the inactive user
+        fetchEmployees(); 
     } catch (error) {
         alert("Error: " + error.message);
     }
@@ -193,7 +236,12 @@ export default function Employees() {
                    <td className="py-3 px-4">{emp.full_name}</td>
                    <td className="py-3 px-4 font-mono text-gray-500">{emp.employee_code}</td>
                    <td className="py-3 px-4"><Badge color="blue">{emp.employee_type}</Badge></td>
-                   <td className="py-3 px-4 text-[#FA4786]">{emp.privilege || '-'}</td>
+                   
+                   {/* CALCULATED PRIVILEGE DISPLAY */}
+                   <td className="py-3 px-4 text-[#FA4786] font-medium">
+                       {emp.display_privilege}
+                   </td>
+
                    <td className="py-3 px-4">
                      <div className="flex flex-wrap gap-1">
                         {emp.license_plate?.split(',').map((p, i) => (
@@ -212,13 +260,12 @@ export default function Employees() {
         )}
       </Card>
 
-      {/* Modal code remains exactly the same as before */}
       <Modal 
         isOpen={modalOpen} 
         onClose={() => setModalOpen(false)} 
         title={editingId ? "Edit Employee" : "Add Employee"} 
         onSave={handleSave} 
-        saveLabel={editingId ? "บันทึกแก้ไข (Save)" : "เพิ่มพนักงาน (Add)"}
+        saveLabel={editingId ? "Save Changes" : "Add Employee"} // English Only
       >
         <div className="space-y-4">
             {!editingId && (
@@ -231,8 +278,8 @@ export default function Employees() {
             )}
             {editingId && (
                 <div>
-                     <label className="block text-sm font-medium text-gray-500 mb-1">Employee ID</label>
-                     <input type="text" disabled value={editingId} className="w-full bg-gray-100 border rounded-lg p-2 text-gray-500" />
+                      <label className="block text-sm font-medium text-gray-500 mb-1">Employee ID</label>
+                      <input type="text" disabled value={editingId} className="w-full bg-gray-100 border rounded-lg p-2 text-gray-500" />
                 </div>
             )}
 
@@ -269,9 +316,13 @@ export default function Employees() {
                         <option value="Management">Management</option>
                     </select>
                 </div>
+                
+                {/* PRIVILEGE INPUT REMOVED - Auto Calculated */}
                 <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Privilege</label>
-                    <input type="text" className="w-full border rounded-lg p-2" value={formData.privilege} onChange={e => setFormData({...formData, privilege: e.target.value})} />
+                     <label className="block text-sm font-medium text-gray-400 mb-1">Privilege</label>
+                     <div className="w-full bg-gray-50 border border-gray-100 rounded-lg p-2 text-gray-400 text-sm italic">
+                        Auto-lookup from Bond Holders
+                     </div>
                 </div>
             </div>
 
