@@ -20,20 +20,19 @@ export default function Home() {
   
   // --- DATE FILTER STATE ---
   const today = new Date();
-  const currentYear = today.getFullYear(); // 2025
-  const currentMonth = today.getMonth();   // 11 (December)
+  const currentYear = today.getFullYear();
+  const currentMonth = today.getMonth(); 
   
   const [selectedYear, setSelectedYear] = useState(currentYear);
   const [selectedMonth, setSelectedMonth] = useState(currentMonth);
 
-  // --- GENERATE YEARS DYNAMICALLY (From 2024 to Current Year) ---
   const startYear = 2024;
   const years = [];
   for (let y = startYear; y <= currentYear; y++) {
       years.push(y);
   }
 
-  // Safety Check: If selected time is in future, reset to now
+  // Safety Check
   useEffect(() => {
     if (selectedYear > currentYear) {
         setSelectedYear(currentYear);
@@ -132,7 +131,6 @@ export default function Home() {
         const isFree = isFreeParking(b.employees?.employee_code);
 
         // --- A. MOVEMENT LOGIC ---
-        // 1. BEGINNING BALANCE
         if (bStart < monthStart && bEnd >= monthStart) {
             beg.count++;
             const fee = price; 
@@ -141,7 +139,6 @@ export default function Home() {
             beg.net += net;
         }
 
-        // 2. NEW BOOKING
         if (bStart >= monthStart && bStart <= monthEnd) {
             newB.count++;
             const diffTime = monthEnd.getTime() - bStart.getTime();
@@ -159,7 +156,6 @@ export default function Home() {
             });
         }
 
-        // 3. EXPIRED BOOKING
         if (bEnd >= monthStart && bEnd < monthEnd) {
             exp.count++;
             const diffTime = monthEnd.getTime() - bEnd.getTime();
@@ -288,21 +284,46 @@ export default function Home() {
     saveAs(data, fileName);
   };
 
-  // --- EXPORT 2: PDF ---
+  // --- EXPORT 2: PDF (UPDATED WITH 3.1) ---
   const exportPDF = () => {
     if (!reportData) return;
     try {
         const doc = new jsPDF();
         
+        // Header
         doc.setFontSize(18);
         doc.text(`Turbo Parking Report: ${reportData.monthName} ${reportData.year}`, 14, 20);
         doc.setFontSize(10);
         doc.text(`Generated on: ${new Date().toLocaleString('en-GB', {timeZone: 'Asia/Bangkok'})}`, 14, 28);
 
+        // --- 3.1 Monthly Tenant Detail Report ---
         doc.setFontSize(14);
-        doc.text("3.2 Monthly Booking Summary", 14, 40);
+        doc.text("3.1 Monthly Tenant Detail Report", 14, 40);
+        
         autoTable(doc, {
             startY: 45,
+            head: [['Lot', 'Code', 'Name', 'Start', 'End', 'Total', 'Net']],
+            body: reportData.monthlyDetails.map(item => [
+                item.parking_spots?.lot_id,
+                item.employees?.employee_code,
+                item.employees?.full_name,
+                formatThaiDate(item.effective_start_date),
+                formatThaiDate(item.effective_end_date),
+                item.display_total.toLocaleString(),
+                item.display_net.toLocaleString()
+            ]),
+            theme: 'striped',
+            styles: { fontSize: 8 }, // Smaller font for large table
+            headStyles: { fillColor: [0, 45, 114] }
+        });
+
+        // --- 3.2 Monthly Booking Summary ---
+        let finalY = (doc.lastAutoTable && doc.lastAutoTable.finalY) || 50;
+        doc.setFontSize(14);
+        doc.text("3.2 Monthly Booking Summary", 14, finalY + 15);
+        
+        autoTable(doc, {
+            startY: finalY + 20,
             head: [['Description', 'Count', 'Total Fee', 'Net Fee']],
             body: reportData.movement.map(m => [
                 m.label, m.count, m.total.toLocaleString(), m.net.toLocaleString()
@@ -311,8 +332,10 @@ export default function Home() {
             headStyles: { fillColor: [0, 45, 114] }
         });
 
-        let finalY = (doc.lastAutoTable && doc.lastAutoTable.finalY) || 50; 
+        // --- 3.3 New Booking Details ---
+        finalY = doc.lastAutoTable.finalY; 
         doc.text("3.3 New Booking Details", 14, finalY + 15);
+        
         autoTable(doc, {
             startY: finalY + 20,
             head: [['Code', 'Name', 'Start', 'End', 'Lot', 'Plate']],
@@ -347,8 +370,6 @@ export default function Home() {
         </div>
         <div className="flex gap-2 items-center bg-white p-2 rounded-xl border shadow-sm">
             <Calendar size={18} className="text-gray-400 ml-2"/>
-            
-            {/* FIXED YEAR SELECTOR: Capped at currentYear */}
             <select 
                 value={selectedYear} 
                 onChange={(e) => setSelectedYear(parseInt(e.target.value))}
@@ -356,10 +377,7 @@ export default function Home() {
             >
                 {years.map(y => <option key={y} value={y}>{y}</option>)}
             </select>
-
             <span className="text-gray-300">|</span>
-
-            {/* FIXED MONTH SELECTOR: Future months disabled */}
             <select 
                 value={selectedMonth} 
                 onChange={(e) => setSelectedMonth(parseInt(e.target.value))}
