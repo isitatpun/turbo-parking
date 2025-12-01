@@ -53,44 +53,6 @@ export default function BookingList() {
     }
   };
 
-  // --- 1. NEW FEE LOGIC (Capped at Today) ---
-  const calculateFees = (price, startStr, endStr) => {
-    if (!price || !startStr || !endStr) return { total: 0, net: 0 };
-    
-    const start = new Date(startStr);
-    const end = new Date(endStr);
-    const today = new Date();
-    
-    // Normalize times to midnight to avoid hour calculation issues
-    start.setHours(0,0,0,0);
-    end.setHours(0,0,0,0);
-    today.setHours(0,0,0,0);
-
-    // Logic: End Date is the MINIMUM of (Today, Scheduled End Date)
-    // If today is before the start date (Future Booking), the effective end is before start, resulting in 0 days.
-    let effectiveEnd = end < today ? end : today;
-
-    // If the effective end is before the start (e.g. Future booking), fee is 0
-    if (effectiveEnd < start) {
-        return { total: 0, net: 0 };
-    }
-
-    // Calculate days difference
-    const diffTime = Math.abs(effectiveEnd - start);
-    const days = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1; // +1 to include start day
-    
-    // Prorated Calculation (Assuming Price is Monthly)
-    const dailyRate = price / 30; 
-    const totalFee = dailyRate * days;
-    const privilege = 0; 
-    const netFee = totalFee - privilege;
-
-    return { 
-        total: Math.floor(totalFee), 
-        net: Math.floor(netFee) 
-    };
-  };
-
   const getStatus = (start, end) => {
     if (!start || !end) return 'Unknown';
     const today = new Date();
@@ -185,23 +147,20 @@ export default function BookingList() {
                         <th className="py-3 px-4">Start Date</th>
                         <th className="py-3 px-4">End Date</th>
                         <th className="py-3 px-4">Status</th>
-                        <th className="py-3 px-4 text-right">Fee (Accrued)</th>
+                        {/* Removed Fee Column Header */}
                         <th className="py-3 px-4 text-center">Action</th>
                     </tr>
                 </thead>
                 <tbody className="divide-y">
                     {loading ? (
-                        <tr><td colSpan="9" className="p-8 text-center text-gray-500">Loading...</td></tr>
+                        <tr><td colSpan="8" className="p-8 text-center text-gray-500">Loading...</td></tr>
                     ) : filteredBookings.length === 0 ? (
-                        <tr><td colSpan="9" className="p-8 text-center text-gray-400">No bookings found.</td></tr>
+                        <tr><td colSpan="8" className="p-8 text-center text-gray-400">No bookings found.</td></tr>
                     ) : filteredBookings.map((row) => {
                         const status = getStatus(row.booking_start, row.booking_end);
-                        const fees = calculateFees(row.parking_spots?.price, row.booking_start, row.booking_end);
                         const isEditing = editingId === row.id;
                         
-                        // Check if date is "Indefinite" (9999-12-31)
                         const isIndefinite = row.booking_end && row.booking_end.startsWith('9999');
-
                         const displayPlate = row.license_plate_used || row.employees?.license_plate || "-";
                         const displayLot = row.parking_spots?.lot_id || "-";
 
@@ -226,7 +185,7 @@ export default function BookingList() {
                                     )}
                                 </td>
 
-                                {/* END DATE (With Indefinite Logic) */}
+                                {/* END DATE */}
                                 <td className="py-3 px-4">
                                     {isEditing ? (
                                         <div className="flex flex-col gap-1 items-start">
@@ -236,11 +195,9 @@ export default function BookingList() {
                                                 value={editForm.booking_end}
                                                 onChange={e => setEditForm({...editForm, booking_end: e.target.value})}
                                             />
-                                            {/* --- 2. INDEFINITE BUTTON --- */}
                                             <button 
                                                 onClick={setIndefinite}
                                                 className="flex items-center gap-1 text-[10px] bg-blue-50 text-blue-600 px-2 py-0.5 rounded hover:bg-blue-100 transition"
-                                                title="Set to 31/12/9999"
                                                 type="button"
                                             >
                                                 <InfinityIcon size={10} /> Set Indefinite
@@ -263,9 +220,7 @@ export default function BookingList() {
                                     </Badge>
                                 </td>
 
-                                <td className="py-3 px-4 text-right font-bold text-[#002D72]">
-                                    {fees.net.toLocaleString()}
-                                </td>
+                                {/* Removed Fee Column Cell */}
 
                                 <td className="py-3 px-4 flex justify-center gap-2">
                                     {isEditing ? (
