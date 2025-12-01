@@ -7,8 +7,9 @@ import MainLayout from './layout/MainLayout';
 import Login from './pages/Login';
 import Home from './pages/Home';
 import Booking from './pages/Booking';
-import BookingList from './pages/BookingList'; // <--- NEW IMPORT
+import BookingList from './pages/BookingList';
 import CarParkPage from './pages/CarParkPage';
+import ZoneManagement from './pages/ZoneManagement'; // <--- NEW IMPORT
 import Employees from './pages/Employees';
 import BondHolder from './pages/BondHolder';
 import UserManagement from './pages/UserManagement';
@@ -57,7 +58,6 @@ export default function App() {
 
             {/* Admin Only Access */}
             
-            {/* --- NEW PAGE: Booking Detail List --- */}
             <Route path="booking-list" element={
               <AdminRoute>
                 <BookingList />
@@ -67,6 +67,13 @@ export default function App() {
             <Route path="car-park" element={
               <AdminRoute>
                 <CarParkPage />
+              </AdminRoute>
+            } />
+
+            {/* --- NEW PAGE: Zone Management --- */}
+            <Route path="zones" element={
+              <AdminRoute>
+                <ZoneManagement />
               </AdminRoute>
             } />
             

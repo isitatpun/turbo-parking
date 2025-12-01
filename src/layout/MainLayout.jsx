@@ -8,7 +8,8 @@ import {
   FileSpreadsheet, 
   LogOut, 
   Shield, 
-  List // <--- Added Icon for Booking List
+  List,
+  Map // <--- Added Icon for Zones
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import userLogo from '../assets/logo.png'; 
@@ -28,14 +29,13 @@ const SidebarItem = ({ to, icon: Icon, label }) => (
 );
 
 export default function MainLayout() {
-  const { user, role, logout } = useAuth(); // Note: Check if your AuthContext provides 'logout' or 'signOut'
+  const { user, role, logout } = useAuth(); 
   const navigate = useNavigate();
 
   // --- ALLOW BOTH ADMIN AND MASTER ADMIN ---
   const isAdmin = role === 'admin' || role === 'master_admin';
 
   const handleLogout = async () => {
-    // If your context uses 'signOut', change 'logout' to 'signOut' here
     if (logout) await logout(); 
     navigate('/login');
   };
@@ -60,10 +60,14 @@ export default function MainLayout() {
           {/* 2. ADMIN & MASTER ADMIN ITEMS */}
           {isAdmin && (
             <>
-              {/* New Booking List Page */}
+              {/* Report List */}
               <SidebarItem to="/booking-list" icon={List} label="Booking List" />
               
+              {/* Asset Management */}
               <SidebarItem to="/car-park" icon={Car} label="Car Park" />
+              <SidebarItem to="/zones" icon={Map} label="Zones" /> {/* <--- NEW ITEM */}
+              
+              {/* People Management */}
               <SidebarItem to="/employees" icon={Users} label="Employees" />
               <SidebarItem to="/bond-holder" icon={FileSpreadsheet} label="Bond Holder" />
               
@@ -80,7 +84,6 @@ export default function MainLayout() {
         <div className="p-4 border-t border-gray-100 bg-gray-50">
            <div className="mb-4 flex items-center gap-3 p-3 rounded-lg bg-white border shadow-sm">
               
-              {/* --- NEW LOGO IMAGE --- */}
               <img 
                 src={userLogo} 
                 alt="User Logo" 
