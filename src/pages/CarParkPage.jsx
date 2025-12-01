@@ -1,16 +1,16 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
 import { Card, Badge, Modal } from '../components/UI';
-import { Plus, Edit2, Trash2 } from 'lucide-react';
+import { Plus, Edit2, Trash2, Map, AlertTriangle, Settings } from 'lucide-react';
 
 export default function CarParkPage() {
   const [spots, setSpots] = useState([]); 
   const [zones, setZones] = useState([]); 
   const [loading, setLoading] = useState(true);
-  const [modalOpen, setModalOpen] = useState(false);
   
+  const [spotModalOpen, setSpotModalOpen] = useState(false);
   const [editingId, setEditingId] = useState(null);
-  
+
   const [formData, setFormData] = useState({ 
     lot_code: '', 
     spot_number: '', 
@@ -28,25 +28,21 @@ export default function CarParkPage() {
     try {
       setLoading(true);
       
-      // 1. Fetch Spots - ORDERED BY LOT ID ASC
       const { data: spotsData, error: spotsError } = await supabase
         .from('parking_spots')
         .select('*')
         .eq('is_active', true)
-        .order('lot_id', { ascending: true }); // <--- SORT FIXED
-      
+        .order('lot_id', { ascending: true });
       if (spotsError) throw spotsError;
 
-      // 2. Fetch Zones (For Dropdown)
       const { data: zonesData, error: zonesError } = await supabase
         .from('zones')
         .select('*')
         .order('code', { ascending: true });
-      
       if (zonesError) throw zonesError;
 
-      setSpots(spotsData || []);
-      setZones(zonesData || []);
+      setSpots(spotsData);
+      setZones(zonesData);
 
     } catch (error) {
       alert('Error loading data: ' + error.message);
@@ -55,21 +51,21 @@ export default function CarParkPage() {
     }
   };
 
-  const handleAddClick = () => {
+  // --- MODAL ACTIONS ---
+  const handleAddSpotClick = () => {
       setEditingId(null);
-      const defaultZone = zones.length > 0 ? zones[0] : { code: '', name: '' };
       setFormData({ 
-          lot_code: defaultZone.code, 
+          lot_code: '', // Start empty
           spot_number: '', 
-          zone_text: defaultZone.name, 
+          zone_text: '', // Start empty
           roof_type: 'No', 
           spot_type: 'General Parking', 
           price: '' 
       });
-      setModalOpen(true);
+      setSpotModalOpen(true);
   };
 
-  const handleEditClick = (spot) => {
+  const handleEditSpotClick = (spot) => {
     setEditingId(spot.id);
     setFormData({
         lot_code: spot.lot_code,
@@ -79,27 +75,32 @@ export default function CarParkPage() {
         spot_type: spot.spot_type,
         price: spot.price
     });
-    setModalOpen(true);
+    setSpotModalOpen(true);
   };
 
-  const handleZoneChange = (e) => {
-      const selectedCode = e.target.value;
-      const zoneObj = zones.find(z => z.code === selectedCode);
-      if (zoneObj) {
-          setFormData(prev => ({
-              ...prev,
-              lot_code: zoneObj.code,
-              zone_text: zoneObj.name
-          }));
-      }
+  // --- NEW: HANDLE MANUAL LOT CODE INPUT WITH AUTO-LOOKUP ---
+  const handleLotCodeChange = (e) => {
+      const inputCode = e.target.value.toUpperCase(); // Force Uppercase
+      
+      // 1. Try to find a matching zone
+      const matchedZone = zones.find(z => z.code === inputCode);
+
+      // 2. Update State
+      setFormData(prev => ({
+          ...prev,
+          lot_code: inputCode,
+          // If match found, auto-fill description. If not, clear it or leave it.
+          zone_text: matchedZone ? matchedZone.name : '' 
+      }));
   };
 
-  const handleSave = async () => {
+  const handleSpotSave = async () => {
     if (!formData.lot_code || !formData.spot_number) {
-        alert("Please select a Zone and enter a Spot Number.");
+        alert("Please enter a Lot Code and Spot Number.");
         return;
     }
 
+    // Duplicate Check
     const isDuplicate = spots.some(s => 
         s.lot_code === formData.lot_code && 
         String(s.spot_number) === String(formData.spot_number) &&
@@ -128,6 +129,7 @@ export default function CarParkPage() {
         alert("Updated successfully!");
       } else {
         const generatedLotId = `${spotData.lot_code}${spotData.spot_number}`;
+        
         const { error } = await supabase.from('parking_spots').insert([{ 
             ...spotData, 
             lot_id: generatedLotId, 
@@ -138,14 +140,14 @@ export default function CarParkPage() {
         alert("Created successfully!");
       }
 
-      setModalOpen(false);
+      setSpotModalOpen(false);
       fetchData(); 
     } catch (error) {
       alert("Error saving: " + error.message);
     }
   };
 
-  const handleDelete = async (id) => {
+  const handleDeleteSpot = async (id) => {
     if (!window.confirm("Are you sure you want to delete this spot?")) return;
     try {
       const { error } = await supabase
@@ -170,8 +172,13 @@ export default function CarParkPage() {
     <div className="space-y-6 animate-in fade-in duration-500">
       <div className="flex justify-between items-center">
         <h2 className="text-2xl font-bold text-[#002D72]">Car Park Spots</h2>
-        <button onClick={handleAddClick} className="bg-[#FA4786] text-white px-4 py-2 rounded-xl flex items-center gap-2 hover:bg-pink-600 shadow-lg shadow-pink-200 transition">
-          <Plus size={18} /> Add Parking Spot
+        
+        {/* ADD SPOT BUTTON */}
+        <button 
+            onClick={handleAddSpotClick}
+            className="bg-[#FA4786] text-white px-4 py-2 rounded-xl flex items-center gap-2 hover:bg-pink-600 shadow-lg shadow-pink-200 transition"
+        >
+            <Plus size={18} /> Add Parking Spot
         </button>
       </div>
 
@@ -192,7 +199,9 @@ export default function CarParkPage() {
                     </tr>
                 </thead>
                 <tbody>
-                    {spots.length === 0 && <tr><td colSpan="6" className="p-4 text-center text-gray-400">No parking spots found.</td></tr>}
+                    {spots.length === 0 && (
+                        <tr><td colSpan="6" className="p-4 text-center text-gray-400">No parking spots found.</td></tr>
+                    )}
                     {spots.map((row) => (
                     <tr key={row.id} className="border-b hover:bg-gray-50 transition">
                         <td className="py-3 px-4 font-bold text-[#002D72]">
@@ -200,11 +209,13 @@ export default function CarParkPage() {
                         </td>
                         <td className="py-3 px-4">{row.zone_text}</td>
                         <td className="py-3 px-4">{row.roof_type ? 'Yes' : 'No'}</td>
-                        <td className="py-3 px-4"><Badge color={getBadgeColor(row.spot_type)}>{row.spot_type}</Badge></td>
+                        <td className="py-3 px-4">
+                            <Badge color={getBadgeColor(row.spot_type)}>{row.spot_type}</Badge>
+                        </td>
                         <td className="py-3 px-4">{row.price.toLocaleString()}</td>
                         <td className="py-3 px-4 text-right flex justify-end gap-2">
-                            <button onClick={() => handleEditClick(row)} className="text-blue-600 hover:bg-blue-50 p-2 rounded-lg"><Edit2 size={16}/></button>
-                            <button onClick={() => handleDelete(row.id)} className="text-red-500 hover:bg-red-50 p-2 rounded-lg"><Trash2 size={16}/></button>
+                            <button onClick={() => handleEditSpotClick(row)} className="text-blue-600 hover:bg-blue-50 p-2 rounded-lg"><Edit2 size={16}/></button>
+                            <button onClick={() => handleDeleteSpot(row.id)} className="text-red-500 hover:bg-red-50 p-2 rounded-lg"><Trash2 size={16}/></button>
                         </td>
                     </tr>
                     ))}
@@ -214,39 +225,54 @@ export default function CarParkPage() {
         )}
       </Card>
 
+      {/* ======================= */}
+      {/* SPOT MODAL (Add/Edit)   */}
+      {/* ======================= */}
       <Modal 
-        isOpen={modalOpen} 
-        onClose={() => setModalOpen(false)} 
+        isOpen={spotModalOpen} 
+        onClose={() => setSpotModalOpen(false)} 
         title={editingId ? "Edit Parking Spot" : "Add Parking Spot"} 
-        onSave={handleSave}
+        onSave={handleSpotSave}
       >
         <div className="grid grid-cols-2 gap-4">
-          <div className="col-span-2">
-            <label className="block text-sm font-medium text-gray-700 mb-1">Select Zone</label>
-            <select 
-                className="w-full border rounded-lg p-2 bg-white focus:ring-2 focus:ring-[#FA4786] outline-none"
-                value={formData.lot_code}
-                onChange={handleZoneChange}
-            >
-                <option value="" disabled>-- Choose a Zone --</option>
-                {zones.map(z => <option key={z.id} value={z.code}>{z.code} - {z.name}</option>)}
-            </select>
+          
+          {/* 1. LOT CODE (EDITABLE + AUTO LOOKUP) */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Lot Code</label>
+            <input 
+                type="text" 
+                className="w-full border rounded-lg p-2 uppercase focus:ring-2 focus:ring-[#FA4786] outline-none" 
+                value={formData.lot_code} 
+                onChange={handleLotCodeChange} // <--- LOOKUP LOGIC ATTACHED
+                placeholder="e.g. A"
+            />
           </div>
 
-          <div>
-            <label className="block text-sm font-medium text-gray-500 mb-1">Lot Code</label>
-            <input type="text" className="w-full border rounded-lg p-2 bg-gray-100 text-gray-500" value={formData.lot_code} readOnly />
-          </div>
+          {/* 2. SPOT NUMBER */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Spot Number</label>
-            <input type="number" className="w-full border rounded-lg p-2 focus:ring-2 focus:ring-[#FA4786]" value={formData.spot_number} onChange={e=>setFormData({...formData, spot_number: e.target.value})} placeholder="e.g. 101" />
+            <input 
+                type="number" 
+                className="w-full border rounded-lg p-2 focus:ring-2 focus:ring-[#FA4786] outline-none" 
+                value={formData.spot_number} 
+                onChange={e=>setFormData({...formData, spot_number: e.target.value})} 
+                placeholder="e.g. 101"
+            />
           </div>
 
+          {/* 3. ZONE DESCRIPTION (READ ONLY - Auto Filled) */}
           <div className="col-span-2">
-             <label className="block text-sm font-medium text-gray-500 mb-1">Zone Description</label>
-             <input type="text" className="w-full border rounded-lg p-2 bg-gray-100 text-gray-500" value={formData.zone_text} readOnly />
+             <label className="block text-sm font-medium text-gray-500 mb-1">Zone Description (Auto-filled)</label>
+             <input 
+                type="text" 
+                className="w-full border rounded-lg p-2 bg-gray-100 text-gray-500 cursor-not-allowed" 
+                value={formData.zone_text} 
+                placeholder="Type Lot Code above to find Zone..."
+                readOnly 
+             />
           </div>
 
+          {/* 4. OTHER FIELDS */}
           <div>
              <label className="block text-sm font-medium text-gray-700 mb-1">Roof</label>
              <select className="w-full border rounded-lg p-2" value={formData.roof_type} onChange={e=>setFormData({...formData, roof_type: e.target.value})}>
