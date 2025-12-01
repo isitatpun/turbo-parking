@@ -1,16 +1,17 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
 import { Card, Badge } from '../components/UI';
-import { Search, Edit, X, Save, Calendar } from 'lucide-react';
+import { Search, Edit, X, Save, AlertTriangle } from 'lucide-react';
 
 export default function BookingList() {
   const [bookings, setBookings] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [errorMsg, setErrorMsg] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
   
   // Edit State
   const [editingId, setEditingId] = useState(null);
-  const [editForm, setEditForm] = useState({ start_date: '', end_date: '' });
+  const [editForm, setEditForm] = useState({ booking_start: '', booking_end: '' });
 
   useEffect(() => {
     fetchBookings();
@@ -19,27 +20,43 @@ export default function BookingList() {
   const fetchBookings = async () => {
     try {
       setLoading(true);
-      // We join 'employees' and 'parking_spots' to get details
+      setErrorMsg(null);
+
+      // --- MATCHING YOUR EXACT SCHEMA ---
       const { data, error } = await supabase
         .from('bookings')
         .select(`
-          *,
-          employees ( employee_code, full_name, license_plates ),
-          parking_spots ( price )
+          id,
+          booking_start,
+          booking_end,
+          license_plate_used,
+          status,
+          employees (
+            employee_code,
+            full_name,
+            license_plate
+          ),
+          parking_spots (
+            lot_id,
+            price
+          )
         `)
-        .order('start_date', { ascending: false });
+        .order('booking_start', { ascending: false });
 
       if (error) throw error;
       setBookings(data || []);
+
     } catch (error) {
-      console.error("Error:", error);
+      console.error("Fetch Error:", error);
+      setErrorMsg(error.message);
     } finally {
       setLoading(false);
     }
   };
 
-  // --- CALCULATION HELPERS ---
+  // --- STATUS LOGIC ---
   const getStatus = (start, end) => {
+    if (!start || !end) return 'Unknown';
     const today = new Date();
     today.setHours(0,0,0,0);
     const endDate = new Date(end);
@@ -50,23 +67,21 @@ export default function BookingList() {
     return 'Active';
   };
 
+  // --- FEE CALCULATION ---
   const calculateFees = (price, start, end) => {
     if (!price || !start || !end) return { total: 0, net: 0 };
     
     const startDate = new Date(start);
     const endDate = new Date(end);
     
-    // Calculate difference in days (inclusive)
+    // Calculate days
     const diffTime = Math.abs(endDate - startDate);
     const days = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1; 
     
-    // Logic: Assuming monthly price / 30 * days (or standard calculation)
-    // For now, let's assume Price is the Monthly Rate.
-    // We will apply a standard "Privilege" placeholder (e.g. 0 discount for now)
-    
-    const dailyRate = price / 30; // Approximation
+    // Logic: (Price / 30) * Days
+    const dailyRate = price / 30; 
     const totalFee = dailyRate * days;
-    const privilege = 0; // Logic for bond holder discount goes here later
+    const privilege = 0; // Future logic
     const netFee = totalFee - privilege;
 
     return { 
@@ -78,9 +93,10 @@ export default function BookingList() {
   // --- EDIT HANDLERS ---
   const startEdit = (booking) => {
     setEditingId(booking.id);
+    // Format dates for HTML input (YYYY-MM-DD)
     setEditForm({
-        start_date: booking.start_date,
-        end_date: booking.end_date
+        booking_start: booking.booking_start ? booking.booking_start.split('T')[0] : '',
+        booking_end: booking.booking_end ? booking.booking_end.split('T')[0] : ''
     });
   };
 
@@ -89,14 +105,15 @@ export default function BookingList() {
         const { error } = await supabase
             .from('bookings')
             .update({
-                start_date: editForm.start_date,
-                end_date: editForm.end_date
+                booking_start: new Date(editForm.booking_start).toISOString(),
+                booking_end: new Date(editForm.booking_end).toISOString(),
+                updated_at: new Date().toISOString()
             })
             .eq('id', editingId);
 
         if (error) throw error;
         
-        alert("Booking updated!");
+        alert("Booking dates updated!");
         setEditingId(null);
         fetchBookings(); // Refresh data
     } catch (error) {
@@ -105,18 +122,20 @@ export default function BookingList() {
   };
 
   // --- FILTER ---
-  const filteredBookings = bookings.filter(b => 
-    b.lot_id.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    b.employees?.employee_code.includes(searchTerm) ||
-    b.employees?.full_name.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  const filteredBookings = bookings.filter(b => {
+    const searchLower = searchTerm.toLowerCase();
+    const code = b.employees?.employee_code || '';
+    const name = b.employees?.full_name?.toLowerCase() || '';
+    const lot = b.parking_spots?.lot_id?.toLowerCase() || ''; // Access nested lot_id
+    
+    return code.includes(searchTerm) || name.includes(searchLower) || lot.includes(searchLower);
+  });
 
   return (
     <div className="space-y-6 h-[calc(100vh-100px)] flex flex-col animate-in fade-in">
       <div className="flex justify-between items-center">
         <h2 className="text-2xl font-bold text-[#002D72]">Booking Detail List</h2>
         
-        {/* Search Bar */}
         <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={20} />
             <input 
@@ -128,6 +147,16 @@ export default function BookingList() {
             />
         </div>
       </div>
+
+      {errorMsg && (
+        <div className="bg-red-50 text-red-600 p-4 rounded-xl border border-red-200 flex items-center gap-3">
+            <AlertTriangle size={24} />
+            <div>
+                <p className="font-bold">Error Loading Data</p>
+                <p className="text-sm">{errorMsg}</p>
+            </div>
+        </div>
+      )}
 
       <Card className="flex-1 overflow-hidden flex flex-col">
         <div className="overflow-auto flex-1">
@@ -141,42 +170,43 @@ export default function BookingList() {
                         <th className="py-3 px-4">Start Date</th>
                         <th className="py-3 px-4">End Date</th>
                         <th className="py-3 px-4">Status</th>
-                        <th className="py-3 px-4 text-right">Parking Fee</th>
-                        <th className="py-3 px-4 text-right">Privilege</th>
-                        <th className="py-3 px-4 text-right">Net Fee</th>
+                        <th className="py-3 px-4 text-right">Fee</th>
                         <th className="py-3 px-4 text-center">Action</th>
                     </tr>
                 </thead>
                 <tbody className="divide-y">
                     {loading ? (
-                        <tr><td colSpan="11" className="p-8 text-center">Loading...</td></tr>
+                        <tr><td colSpan="9" className="p-8 text-center text-gray-500">Loading booking data...</td></tr>
+                    ) : filteredBookings.length === 0 ? (
+                        <tr><td colSpan="9" className="p-8 text-center text-gray-400">No bookings found.</td></tr>
                     ) : filteredBookings.map((row) => {
-                        const status = getStatus(row.start_date, row.end_date);
-                        const fees = calculateFees(row.parking_spots?.price, row.start_date, row.end_date);
+                        const status = getStatus(row.booking_start, row.booking_end);
+                        const fees = calculateFees(row.parking_spots?.price, row.booking_start, row.booking_end);
                         const isEditing = editingId === row.id;
 
-                        // Parse License Plates (handle if it's array or null)
-                        let plates = "-";
-                        if (row.employees?.license_plates) {
-                             plates = Array.isArray(row.employees.license_plates) 
-                                ? row.employees.license_plates.join(", ") 
-                                : row.employees.license_plates;
-                        }
+                        // Display Logic: Prefer 'license_plate_used' from booking, else fall back to employee default
+                        const displayPlate = row.license_plate_used || row.employees?.license_plate || "-";
+                        const displayLot = row.parking_spots?.lot_id || "-";
 
                         return (
                             <tr key={row.id} className="hover:bg-gray-50">
+                                {/* CODE */}
                                 <td className="py-3 px-4 font-mono text-blue-600">
                                     {row.employees?.employee_code || "N/A"}
                                 </td>
+                                
+                                {/* NAME */}
                                 <td className="py-3 px-4 font-medium">
                                     {row.employees?.full_name || "Unknown"}
                                 </td>
+                                
+                                {/* LOT ID (From Parking Spot Relation) */}
                                 <td className="py-3 px-4 font-bold text-gray-700">
-                                    {row.lot_id}
+                                    {displayLot}
                                 </td>
-                                <td className="py-3 px-4 text-gray-500">
-                                    {plates}
-                                </td>
+                                
+                                {/* LICENSE */}
+                                <td className="py-3 px-4 text-gray-500">{displayPlate}</td>
                                 
                                 {/* START DATE */}
                                 <td className="py-3 px-4">
@@ -184,11 +214,11 @@ export default function BookingList() {
                                         <input 
                                             type="date" 
                                             className="border rounded px-2 py-1 w-32"
-                                            value={editForm.start_date}
-                                            onChange={e => setEditForm({...editForm, start_date: e.target.value})}
+                                            value={editForm.booking_start}
+                                            onChange={e => setEditForm({...editForm, booking_start: e.target.value})}
                                         />
                                     ) : (
-                                        new Date(row.start_date).toLocaleDateString('en-GB')
+                                        row.booking_start ? new Date(row.booking_start).toLocaleDateString('en-GB') : "-"
                                     )}
                                 </td>
 
@@ -198,30 +228,27 @@ export default function BookingList() {
                                         <input 
                                             type="date" 
                                             className="border rounded px-2 py-1 w-32"
-                                            value={editForm.end_date}
-                                            onChange={e => setEditForm({...editForm, end_date: e.target.value})}
+                                            value={editForm.booking_end}
+                                            onChange={e => setEditForm({...editForm, booking_end: e.target.value})}
                                         />
                                     ) : (
-                                        new Date(row.end_date).toLocaleDateString('en-GB')
+                                        row.booking_end ? new Date(row.booking_end).toLocaleDateString('en-GB') : "-"
                                     )}
                                 </td>
 
+                                {/* STATUS */}
                                 <td className="py-3 px-4">
                                     <Badge color={status === 'Active' ? 'green' : status === 'Future' ? 'blue' : 'gray'}>
                                         {status}
                                     </Badge>
                                 </td>
 
-                                <td className="py-3 px-4 text-right text-gray-500">
-                                    {fees.total.toLocaleString()}
-                                </td>
-                                <td className="py-3 px-4 text-right text-green-600">
-                                    0
-                                </td>
+                                {/* NET FEE */}
                                 <td className="py-3 px-4 text-right font-bold text-[#002D72]">
                                     {fees.net.toLocaleString()}
                                 </td>
 
+                                {/* ACTIONS */}
                                 <td className="py-3 px-4 flex justify-center gap-2">
                                     {isEditing ? (
                                         <>
