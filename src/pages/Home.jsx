@@ -13,6 +13,9 @@ import { saveAs } from 'file-saver';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 
+// IMPORTANT: You must have this file created with the Base64 string of Sarabun.ttf
+import { fontBase64 } from '../lib/ThaiFont'; 
+
 export default function Home() {
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState(1);
@@ -32,7 +35,7 @@ export default function Home() {
       years.push(y);
   }
 
-  // Safety Check
+  // Safety Check for future dates
   useEffect(() => {
     if (selectedYear > currentYear) {
         setSelectedYear(currentYear);
@@ -50,18 +53,23 @@ export default function Home() {
     try {
       setLoading(true);
 
+      // 1. Fetch Data with Deleted Filter
       const [bookingsRes, spotsRes, bondRes] = await Promise.all([
-        supabase.from('bookings').select(`
+        supabase.from('bookings')
+          .select(`
             *, 
             employees (employee_code, full_name, license_plate, employee_type), 
             parking_spots (lot_id, price, zone_text, spot_type)
-        `),
+          `)
+          .eq('is_deleted', false), // <--- FILTER DELETED
+        
         supabase.from('parking_spots').select('*'),
         supabase.from('bond_holders').select('employee_code, tier')
       ]);
 
       if (bookingsRes.error) throw bookingsRes.error;
 
+      // 2. Process Data
       const processed = processMonthlyData(
         bookingsRes.data, 
         spotsRes.data, 
@@ -79,12 +87,20 @@ export default function Home() {
     }
   };
 
-  // --- HELPER: THAILAND DATE FORMAT ---
+  // --- HELPERS ---
   const formatThaiDate = (dateObj) => {
     if (!dateObj) return '-';
     return new Date(dateObj).toLocaleDateString('en-GB', { 
         timeZone: 'Asia/Bangkok' 
     });
+  };
+
+  const formatMoney = (amount) => {
+      // Formats to 2 decimal places (e.g. 1,200.00)
+      return (amount || 0).toLocaleString(undefined, { 
+          minimumFractionDigits: 2, 
+          maximumFractionDigits: 2 
+      });
   };
 
   const toMidnight = (dateInput) => {
@@ -93,21 +109,25 @@ export default function Home() {
     return d;
   };
 
-  // --- CORE CALCULATION ENGINE ---
+  // --- CORE LOGIC ENGINE ---
   const processMonthlyData = (bookings, allSpots, bondHolders, year, month) => {
     const monthStart = new Date(year, month, 1);
     const monthEnd = new Date(year, month + 1, 0); 
     const daysInMonth = monthEnd.getDate();
 
-    // UPDATED: Check for Free Parking (Bond Holder Tier 1/2 OR Management Type)
+    // Logic: Free Parking if Management OR Bond Holder Tier 1/2
     const isFreeParking = (empCode, empType) => {
-        // 1. Check Management Type
         if (empType === 'Management') return true;
-
-        // 2. Check Bond Holder Tier
         if (!empCode) return false;
         const holder = bondHolders?.find(b => b.employee_code === empCode);
         return holder && (holder.tier === 1 || holder.tier === 2);
+    };
+
+    // Logic: Get Privilege Text
+    const getPrivilegeText = (empCode) => {
+        if (!empCode) return '-';
+        const holder = bondHolders?.find(b => b.employee_code === empCode);
+        return holder ? `Bond Holder Tier ${holder.tier}` : '-';
     };
 
     let beg = { count: 0, total: 0, net: 0 };
@@ -134,10 +154,14 @@ export default function Home() {
         const price = b.parking_spots?.price || 0;
         const dailyRate = price / daysInMonth;
         
-        // Pass both Code and Type to check
-        const isFree = isFreeParking(b.employees?.employee_code, b.employees?.employee_type);
+        const empCode = b.employees?.employee_code;
+        const empType = b.employees?.employee_type || '-';
+        
+        const isFree = isFreeParking(empCode, empType);
+        const privilegeText = getPrivilegeText(empCode);
 
-        // --- A. MOVEMENT LOGIC ---
+        // --- A. MOVEMENT ---
+        // Beginning
         if (bStart < monthStart && bEnd >= monthStart) {
             beg.count++;
             const fee = price; 
@@ -146,6 +170,7 @@ export default function Home() {
             beg.net += net;
         }
 
+        // New
         if (bStart >= monthStart && bStart <= monthEnd) {
             newB.count++;
             const diffTime = monthEnd.getTime() - bStart.getTime();
@@ -163,6 +188,7 @@ export default function Home() {
             });
         }
 
+        // Expired
         if (bEnd >= monthStart && bEnd < monthEnd) {
             exp.count++;
             const diffTime = monthEnd.getTime() - bEnd.getTime();
@@ -174,7 +200,7 @@ export default function Home() {
             exp.net += lostNet;
         }
 
-        // --- B. DETAIL REPORT LOGIC ---
+        // --- B. MONTHLY TENANT DETAILS ---
         const effectiveStart = bStart > monthStart ? bStart : monthStart;
         const effectiveLimit = bEnd < reportCapDate ? bEnd : reportCapDate;
         const effectiveEnd = effectiveLimit; 
@@ -194,7 +220,9 @@ export default function Home() {
                 effective_end_date: effectiveEnd,
                 display_days: daysOccupied,
                 display_total: totalFee,
-                display_net: netFee
+                display_net: netFee,
+                display_type: empType,        // Added
+                display_privilege: privilegeText // Added
             });
 
             if (bEnd >= reportCapDate && b.parking_spots?.spot_type === 'Reserved (Paid) Parking') {
@@ -256,10 +284,12 @@ export default function Home() {
         "Lot ID": item.parking_spots?.lot_id,
         "Employee Code": item.employees?.employee_code,
         "Name": item.employees?.full_name,
+        "Type": item.display_type,          // <--- ADDED
+        "Privilege": item.display_privilege, // <--- ADDED
         "Start Date (Effective)": formatThaiDate(item.effective_start_date),
         "End Date (Effective)": formatThaiDate(item.effective_end_date),
         "Days": item.display_days,
-        "Total Fee": item.display_total,
+        "Total Fee": item.display_total, 
         "Net Fee": item.display_net
     }));
     const ws1 = XLSX.utils.json_to_sheet(ws1Data);
@@ -291,12 +321,18 @@ export default function Home() {
     saveAs(data, fileName);
   };
 
-  // --- EXPORT 2: PDF (UPDATED WITH 3.1) ---
+  // --- EXPORT 2: PDF ---
   const exportPDF = () => {
     if (!reportData) return;
     try {
-        const doc = new jsPDF();
-        
+        const doc = new jsPDF('l'); // Landscape orientation
+
+        // 1. Register Thai Font (Sarabun)
+        // Ensure you have src/lib/ThaiFont.js with the Base64 string
+        doc.addFileToVFS("Sarabun-Regular.ttf", fontBase64);
+        doc.addFont("Sarabun-Regular.ttf", "Sarabun", "normal");
+        doc.setFont("Sarabun");
+
         // Header
         doc.setFontSize(18);
         doc.text(`Turbo Parking Report: ${reportData.monthName} ${reportData.year}`, 14, 20);
@@ -309,19 +345,29 @@ export default function Home() {
         
         autoTable(doc, {
             startY: 45,
-            head: [['Lot', 'Code', 'Name', 'Start', 'End', 'Total', 'Net']],
+            head: [['Lot', 'Code', 'Name', 'Type', 'Privilege', 'Start', 'End', 'Total', 'Net']],
             body: reportData.monthlyDetails.map(item => [
                 item.parking_spots?.lot_id,
                 item.employees?.employee_code,
                 item.employees?.full_name,
+                item.display_type,       // <--- ADDED
+                item.display_privilege,  // <--- ADDED
                 formatThaiDate(item.effective_start_date),
                 formatThaiDate(item.effective_end_date),
-                item.display_total.toLocaleString(),
-                item.display_net.toLocaleString()
+                formatMoney(item.display_total), // <--- 2 DECIMAL
+                formatMoney(item.display_net)    // <--- 2 DECIMAL
             ]),
             theme: 'striped',
-            styles: { fontSize: 8 }, // Smaller font for large table
-            headStyles: { fillColor: [0, 45, 114] }
+            // 2. Apply Thai Font to Table
+            styles: { 
+                font: 'Sarabun', 
+                fontSize: 8 
+            }, 
+            headStyles: { fillColor: [0, 45, 114] },
+            columnStyles: {
+                7: { halign: 'right' },
+                8: { halign: 'right' }
+            }
         });
 
         // --- 3.2 Monthly Booking Summary ---
@@ -333,10 +379,18 @@ export default function Home() {
             startY: finalY + 20,
             head: [['Description', 'Count', 'Total Fee', 'Net Fee']],
             body: reportData.movement.map(m => [
-                m.label, m.count, m.total.toLocaleString(), m.net.toLocaleString()
+                m.label, 
+                m.count, 
+                formatMoney(m.total),
+                formatMoney(m.net)
             ]),
             theme: 'grid',
-            headStyles: { fillColor: [0, 45, 114] }
+            styles: { font: 'Sarabun' },
+            headStyles: { fillColor: [0, 45, 114] },
+            columnStyles: {
+                2: { halign: 'right' },
+                3: { halign: 'right' }
+            }
         });
 
         // --- 3.3 New Booking Details ---
@@ -355,6 +409,7 @@ export default function Home() {
                 i.license_plate_used || i.employees?.license_plate
             ]),
             theme: 'striped',
+            styles: { font: 'Sarabun' },
             headStyles: { fillColor: [250, 71, 134] }
         });
         
@@ -444,10 +499,10 @@ export default function Home() {
                                 <td className="py-3 px-4 font-medium text-gray-700">{row.label}</td>
                                 <td className="py-3 px-4 text-center font-bold">{row.count}</td>
                                 <td className={`py-3 px-4 text-right font-mono ${row.total < 0 ? 'text-red-500' : ''}`}>
-                                    {row.total.toLocaleString()}
+                                    {formatMoney(row.total)}
                                 </td>
                                 <td className={`py-3 px-4 text-right font-mono font-bold ${row.net < 0 ? 'text-red-500' : 'text-green-700'}`}>
-                                    {row.net.toLocaleString()}
+                                    {formatMoney(row.net)}
                                 </td>
                             </tr>
                         ))}
@@ -458,11 +513,11 @@ export default function Home() {
             <div className="grid grid-cols-3 gap-6">
                 <Card className="p-6 border-l-4 border-l-blue-500">
                     <p className="text-gray-500 text-sm">Total Revenue</p>
-                    <h3 className="text-2xl font-bold text-[#002D72] mt-1">฿ {reportData.financials.revenue.toLocaleString()}</h3>
+                    <h3 className="text-2xl font-bold text-[#002D72] mt-1">฿ {formatMoney(reportData.financials.revenue)}</h3>
                 </Card>
                 <Card className="p-6 border-l-4 border-l-green-500">
                     <p className="text-gray-500 text-sm">Net Parking Fee</p>
-                    <h3 className="text-2xl font-bold text-green-700 mt-1">฿ {reportData.financials.net.toLocaleString()}</h3>
+                    <h3 className="text-2xl font-bold text-green-700 mt-1">฿ {formatMoney(reportData.financials.net)}</h3>
                 </Card>
                 <Card className="p-6 border-l-4 border-l-[#FA4786]">
                     <p className="text-gray-500 text-sm">Occupancy (Reserved Only)</p>
@@ -521,6 +576,8 @@ export default function Home() {
                                 <th className="py-3 px-4">Lot ID</th>
                                 <th className="py-3 px-4">Emp Code</th>
                                 <th className="py-3 px-4">Name</th>
+                                <th className="py-3 px-4">Type</th>
+                                <th className="py-3 px-4">Privilege</th>
                                 <th className="py-3 px-4">Start (Effective)</th>
                                 <th className="py-3 px-4">End (Effective)</th>
                                 <th className="py-3 px-4 text-right">Total Fee</th>
@@ -528,16 +585,18 @@ export default function Home() {
                             </tr>
                         </thead>
                         <tbody className="divide-y">
-                            {reportData.monthlyDetails.length === 0 ? <tr><td colSpan="7" className="p-4 text-center text-gray-400">No data</td></tr> :
+                            {reportData.monthlyDetails.length === 0 ? <tr><td colSpan="9" className="p-4 text-center text-gray-400">No data</td></tr> :
                             reportData.monthlyDetails.map((row, i) => (
                                 <tr key={i} className="hover:bg-gray-50">
                                     <td className="py-3 px-4 font-bold">{row.parking_spots?.lot_id}</td>
                                     <td className="py-3 px-4 font-mono">{row.employees?.employee_code}</td>
                                     <td className="py-3 px-4">{row.employees?.full_name}</td>
+                                    <td className="py-3 px-4 text-gray-600">{row.display_type}</td>
+                                    <td className="py-3 px-4 text-blue-600 text-xs font-semibold">{row.display_privilege}</td>
                                     <td className="py-3 px-4 text-gray-500">{formatThaiDate(row.effective_start_date)}</td>
                                     <td className="py-3 px-4 text-gray-500">{formatThaiDate(row.effective_end_date)}</td>
-                                    <td className="py-3 px-4 text-right text-gray-400">{row.display_total.toLocaleString()}</td>
-                                    <td className="py-3 px-4 text-right font-bold text-[#002D72] bg-blue-50">{row.display_net.toLocaleString()}</td>
+                                    <td className="py-3 px-4 text-right text-gray-400">{formatMoney(row.display_total)}</td>
+                                    <td className="py-3 px-4 text-right font-bold text-[#002D72] bg-blue-50">{formatMoney(row.display_net)}</td>
                                 </tr>
                             ))}
                         </tbody>
@@ -561,8 +620,12 @@ export default function Home() {
                             <tr key={i}>
                                 <td className="py-3 px-4 font-medium">{m.label}</td>
                                 <td className="py-3 px-4 text-center font-bold">{m.count}</td>
-                                <td className={`py-3 px-4 text-right ${m.total < 0 ? 'text-red-500' : ''}`}>{m.total.toLocaleString()}</td>
-                                <td className={`py-3 px-4 text-right font-bold ${m.net < 0 ? 'text-red-500' : 'text-green-700'}`}>{m.net.toLocaleString()}</td>
+                                <td className={`py-3 px-4 text-right ${m.total < 0 ? 'text-red-500' : ''}`}>
+                                    {formatMoney(m.total)}
+                                </td>
+                                <td className={`py-3 px-4 text-right font-bold ${m.net < 0 ? 'text-red-500' : 'text-green-700'}`}>
+                                    {formatMoney(m.net)}
+                                </td>
                             </tr>
                         ))}
                     </tbody>
