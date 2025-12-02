@@ -396,6 +396,9 @@ export default function Booking() {
                         type="date" 
                         className={`w-full border border-gray-300 rounded-xl px-3 py-2 outline-none focus:ring-2 focus:ring-[#FA4786] ${bookingForm.is_indefinite ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : ''}`}
                         value={bookingForm.end_date}
+                        /* --- ADDED LOGIC HERE --- */
+                        min={bookingForm.start_date}
+                        /* ------------------------ */
                         onChange={(e) => setBookingForm({...bookingForm, end_date: e.target.value})}
                         disabled={bookingForm.is_indefinite}
                     />

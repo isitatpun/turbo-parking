@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
 import { Card, Badge } from '../components/UI';
-import { Search, Edit, X, Save, AlertTriangle, Infinity as InfinityIcon } from 'lucide-react';
+import { Search, Edit, X, Save, AlertTriangle, Trash2, Infinity as InfinityIcon } from 'lucide-react';
 
 export default function BookingList() {
   const [bookings, setBookings] = useState([]);
@@ -12,6 +12,10 @@ export default function BookingList() {
   // Edit State
   const [editingId, setEditingId] = useState(null);
   const [editForm, setEditForm] = useState({ booking_start: '', booking_end: '' });
+
+  // Delete State
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [selectedBookingId, setSelectedBookingId] = useState(null);
 
   useEffect(() => {
     fetchBookings();
@@ -30,6 +34,7 @@ export default function BookingList() {
           booking_end,
           license_plate_used,
           status,
+          is_deleted,
           employees (
             employee_code,
             full_name,
@@ -40,6 +45,8 @@ export default function BookingList() {
             price
           )
         `)
+        // Filter out deleted items so they don't show in the list
+        .eq('is_deleted', false) 
         .order('booking_start', { ascending: false });
 
       if (error) throw error;
@@ -79,6 +86,11 @@ export default function BookingList() {
   };
 
   const saveEdit = async () => {
+    if (editForm.booking_end < editForm.booking_start) {
+        alert("Error: End Date cannot be before Start Date.");
+        return;
+    }
+
     try {
         const { error } = await supabase
             .from('bookings')
@@ -99,6 +111,34 @@ export default function BookingList() {
     }
   };
 
+  // --- DELETE HANDLERS ---
+  const handleDeleteClick = (id) => {
+    setSelectedBookingId(id);
+    setShowDeleteModal(true);
+  };
+
+  const confirmDelete = async () => {
+    if (!selectedBookingId) return;
+
+    try {
+      // Soft Delete: We update 'is_deleted' to true instead of removing the row
+      const { error } = await supabase
+        .from('bookings')
+        .update({ is_deleted: true })
+        .eq('id', selectedBookingId);
+
+      if (error) throw error;
+
+      // Remove from UI locally to avoid full re-fetch
+      setBookings(prev => prev.filter(b => b.id !== selectedBookingId));
+      setShowDeleteModal(false);
+      setSelectedBookingId(null);
+
+    } catch (error) {
+      alert("Delete failed: " + error.message);
+    }
+  };
+
   const filteredBookings = bookings.filter(b => {
     const searchLower = searchTerm.toLowerCase();
     const code = b.employees?.employee_code || '';
@@ -109,7 +149,37 @@ export default function BookingList() {
   });
 
   return (
-    <div className="space-y-6 h-[calc(100vh-100px)] flex flex-col animate-in fade-in">
+    <div className="space-y-6 h-[calc(100vh-100px)] flex flex-col animate-in fade-in relative">
+      
+      {/* --- DELETE CONFIRMATION MODAL --- */}
+      {showDeleteModal && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/20 backdrop-blur-sm rounded-xl">
+          <div className="bg-white p-6 rounded-lg shadow-2xl border w-96 text-center animate-in zoom-in-95">
+            <div className="mx-auto w-12 h-12 bg-red-100 rounded-full flex items-center justify-center mb-4">
+              <Trash2 className="text-red-600" size={24} />
+            </div>
+            <h3 className="text-lg font-bold text-gray-900">Delete Booking?</h3>
+            <p className="text-sm text-gray-500 mt-2 mb-6">
+              Are you sure you want to remove this booking? This action will hide it from the list.
+            </p>
+            <div className="flex gap-3 justify-center">
+              <button 
+                onClick={() => setShowDeleteModal(false)}
+                className="px-4 py-2 border rounded-lg hover:bg-gray-50 text-gray-700 text-sm font-medium"
+              >
+                Cancel
+              </button>
+              <button 
+                onClick={confirmDelete}
+                className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg text-sm font-medium shadow-sm"
+              >
+                Yes, Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="flex justify-between items-center">
         <h2 className="text-2xl font-bold text-[#002D72]">Booking Detail List</h2>
         
@@ -147,7 +217,6 @@ export default function BookingList() {
                         <th className="py-3 px-4">Start Date</th>
                         <th className="py-3 px-4">End Date</th>
                         <th className="py-3 px-4">Status</th>
-                        {/* Removed Fee Column Header */}
                         <th className="py-3 px-4 text-center">Action</th>
                     </tr>
                 </thead>
@@ -193,6 +262,7 @@ export default function BookingList() {
                                                 type="date" 
                                                 className="border rounded px-2 py-1 w-32"
                                                 value={editForm.booking_end}
+                                                min={editForm.booking_start} 
                                                 onChange={e => setEditForm({...editForm, booking_end: e.target.value})}
                                             />
                                             <button 
@@ -220,21 +290,29 @@ export default function BookingList() {
                                     </Badge>
                                 </td>
 
-                                {/* Removed Fee Column Cell */}
-
                                 <td className="py-3 px-4 flex justify-center gap-2">
                                     {isEditing ? (
                                         <>
                                             <button onClick={saveEdit} className="text-green-600 hover:bg-green-50 p-1 rounded"><Save size={18} /></button>
-                                            <button onClick={() => setEditingId(null)} className="text-red-500 hover:bg-red-50 p-1 rounded"><X size={18} /></button>
+                                            <button onClick={() => setEditingId(null)} className="text-gray-500 hover:bg-gray-100 p-1 rounded"><X size={18} /></button>
                                         </>
                                     ) : (
-                                        <button 
-                                            onClick={() => startEdit(row)}
-                                            className="text-blue-600 hover:bg-blue-50 p-1 rounded transition"
-                                        >
-                                            <Edit size={18} />
-                                        </button>
+                                        <>
+                                            <button 
+                                                onClick={() => startEdit(row)}
+                                                className="text-blue-600 hover:bg-blue-50 p-1 rounded transition"
+                                                title="Edit"
+                                            >
+                                                <Edit size={18} />
+                                            </button>
+                                            <button 
+                                                onClick={() => handleDeleteClick(row.id)}
+                                                className="text-red-500 hover:bg-red-50 p-1 rounded transition"
+                                                title="Delete"
+                                            >
+                                                <Trash2 size={18} />
+                                            </button>
+                                        </>
                                     )}
                                 </td>
                             </tr>
