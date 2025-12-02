@@ -30,7 +30,7 @@ export default function Booking() {
     is_indefinite: false
   });
 
-  // --- NEW: SEARCH STATE FOR MODAL ---
+  // Search State for Modal
   const [empSearch, setEmpSearch] = useState('');
 
   // --- 1. LOAD DATA ---
@@ -42,20 +42,17 @@ export default function Booking() {
     try {
       setLoading(true);
 
-      // A. Active Spots
       const { data: spotsData } = await supabase
         .from('parking_spots')
         .select('*')
         .eq('is_active', true)
         .order('lot_id', { ascending: true });
 
-      // B. Active Employees
       const { data: empData } = await supabase
         .from('employees')
         .select('id, employee_code, full_name, license_plate')
         .eq('is_active', true);
 
-      // C. Bookings
       const { data: bookingData } = await supabase
         .from('bookings')
         .select(`*, employees (employee_code, full_name, license_plate)`)
@@ -101,16 +98,16 @@ export default function Booking() {
     return matchZone && matchType && matchStatus;
   });
 
-  // --- 3. FILTER EMPLOYEES FOR MODAL ---
+  // --- 3. FILTER EMPLOYEES ---
   const filteredEmployees = employees.filter(emp => 
     emp.employee_code.includes(empSearch) || 
     emp.full_name.toLowerCase().includes(empSearch.toLowerCase())
   );
 
-  // --- 4. MODAL & ACTIONS ---
+  // --- 4. ACTIONS ---
   const openBookingModal = (spot) => {
     setTargetSpot(spot);
-    setEmpSearch(''); // Reset search when opening
+    setEmpSearch(''); 
     setBookingForm({
         employee_id: '',
         start_date: selectedDate, 
@@ -127,7 +124,7 @@ export default function Booking() {
     }
 
     if (!bookingForm.is_indefinite && !bookingForm.end_date) {
-        alert("Please select an end date or choose 'ไม่มีกำหนด'.");
+        alert("Please select an end date or choose 'Indefinite'.");
         return;
     }
 
@@ -183,7 +180,7 @@ export default function Booking() {
   return (
     <div className="space-y-6 animate-in fade-in duration-500">
       
-      {/* --- HEADER & FILTERS --- */}
+      {/* HEADER & FILTERS */}
       <div className="flex flex-col gap-4">
         <h2 className="text-2xl font-bold text-[#002D72]">Booking Management</h2>
         
@@ -241,7 +238,7 @@ export default function Booking() {
         </div>
       </div>
 
-      {/* --- TABLE --- */}
+      {/* TABLE */}
       <Card>
         {loading ? <div className="p-12 text-center text-gray-400">Loading...</div> : (
             <div className="overflow-auto">
@@ -340,15 +337,15 @@ export default function Booking() {
         onClose={() => setIsModalOpen(false)} 
         title={`Manage Booking: ${targetSpot?.lot_id || 'Spot'}`}
         onSave={handleBookingSave}
-        saveLabel="Booking (ยืนยันการจอง)"
+        saveLabel="Booking"
+        cancelLabel="Cancel" 
       >
         <div className="space-y-5 p-1">
             
-            {/* --- NEW SEARCHABLE EMPLOYEE FIELD --- */}
+            {/* SEARCHABLE EMPLOYEE FIELD */}
             <div>
                 <label className="block text-sm font-bold text-[#002D72] mb-1">Select Employee</label>
                 
-                {/* Search Input */}
                 <div className="relative mb-2">
                     <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
                     <input 
@@ -360,12 +357,11 @@ export default function Booking() {
                     />
                 </div>
 
-                {/* Dropdown */}
                 <select 
                     className="w-full border border-gray-300 rounded-xl px-3 py-2.5 outline-none focus:ring-2 focus:ring-[#FA4786] bg-white"
                     value={bookingForm.employee_id}
                     onChange={(e) => setBookingForm({...bookingForm, employee_id: e.target.value})}
-                    size={filteredEmployees.length > 5 ? 5 : 1} // Auto-expand if searching
+                    size={filteredEmployees.length > 5 ? 5 : 1}
                 >
                     <option value="">-- Click to Select --</option>
                     {filteredEmployees.map(emp => (
@@ -413,7 +409,7 @@ export default function Booking() {
                             onChange={(e) => setBookingForm({...bookingForm, is_indefinite: e.target.checked})}
                         />
                         <label htmlFor="indefinite" className="text-sm text-gray-600 cursor-pointer select-none">
-                            Indefinite: 31/12/9999
+                            Indefinite
                         </label>
                     </div>
                 </div>

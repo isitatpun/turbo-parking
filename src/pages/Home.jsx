@@ -53,7 +53,7 @@ export default function Home() {
       const [bookingsRes, spotsRes, bondRes] = await Promise.all([
         supabase.from('bookings').select(`
             *, 
-            employees (employee_code, full_name, license_plate), 
+            employees (employee_code, full_name, license_plate, employee_type), 
             parking_spots (lot_id, price, zone_text, spot_type)
         `),
         supabase.from('parking_spots').select('*'),
@@ -99,7 +99,12 @@ export default function Home() {
     const monthEnd = new Date(year, month + 1, 0); 
     const daysInMonth = monthEnd.getDate();
 
-    const isFreeParking = (empCode) => {
+    // UPDATED: Check for Free Parking (Bond Holder Tier 1/2 OR Management Type)
+    const isFreeParking = (empCode, empType) => {
+        // 1. Check Management Type
+        if (empType === 'Management') return true;
+
+        // 2. Check Bond Holder Tier
         if (!empCode) return false;
         const holder = bondHolders?.find(b => b.employee_code === empCode);
         return holder && (holder.tier === 1 || holder.tier === 2);
@@ -128,7 +133,9 @@ export default function Home() {
         
         const price = b.parking_spots?.price || 0;
         const dailyRate = price / daysInMonth;
-        const isFree = isFreeParking(b.employees?.employee_code);
+        
+        // Pass both Code and Type to check
+        const isFree = isFreeParking(b.employees?.employee_code, b.employees?.employee_type);
 
         // --- A. MOVEMENT LOGIC ---
         if (bStart < monthStart && bEnd >= monthStart) {
