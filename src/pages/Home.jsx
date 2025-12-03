@@ -21,29 +21,40 @@ export default function Home() {
   const [activeTab, setActiveTab] = useState(1);
   const [reportData, setReportData] = useState(null);
   
-  // --- DATE FILTER STATE ---
+  // --- DATE FILTER STATE (DEFAULT: PREVIOUS MONTH) ---
   const today = new Date();
-  const currentYear = today.getFullYear();
-  const currentMonth = today.getMonth(); 
   
-  const [selectedYear, setSelectedYear] = useState(currentYear);
-  const [selectedMonth, setSelectedMonth] = useState(currentMonth);
+  // Logic to set default to Previous Month
+  let defaultYear = today.getFullYear();
+  let defaultMonth = today.getMonth() - 1; // 0-11 (Jan is 0)
+
+  // Handle January roll-back
+  if (defaultMonth < 0) {
+      defaultMonth = 11; // December
+      defaultYear = defaultYear - 1;
+  }
+
+  const [selectedYear, setSelectedYear] = useState(defaultYear);
+  const [selectedMonth, setSelectedMonth] = useState(defaultMonth);
 
   const startYear = 2024;
+  const currentRealYear = today.getFullYear();
+  const currentRealMonth = today.getMonth();
+
   const years = [];
-  for (let y = startYear; y <= currentYear; y++) {
+  for (let y = startYear; y <= currentRealYear; y++) {
       years.push(y);
   }
 
-  // Safety Check for future dates
+  // Safety Check: Prevent selecting future dates
   useEffect(() => {
-    if (selectedYear > currentYear) {
-        setSelectedYear(currentYear);
+    if (selectedYear > currentRealYear) {
+        setSelectedYear(currentRealYear);
     }
-    if (selectedYear === currentYear && selectedMonth > currentMonth) {
-        setSelectedMonth(currentMonth);
+    if (selectedYear === currentRealYear && selectedMonth > currentRealMonth) {
+        setSelectedMonth(currentRealMonth);
     }
-  }, [selectedYear, currentYear, currentMonth]);
+  }, [selectedYear, selectedMonth, currentRealYear, currentRealMonth]);
 
   useEffect(() => {
     fetchReportData();
@@ -53,7 +64,6 @@ export default function Home() {
     try {
       setLoading(true);
 
-      // 1. Fetch Data with Deleted Filter
       const [bookingsRes, spotsRes, bondRes] = await Promise.all([
         supabase.from('bookings')
           .select(`
@@ -61,7 +71,7 @@ export default function Home() {
             employees (employee_code, full_name, license_plate, employee_type), 
             parking_spots (lot_id, price, zone_text, spot_type)
           `)
-          .eq('is_deleted', false), // <--- FILTER DELETED
+          .eq('is_deleted', false),
         
         supabase.from('parking_spots').select('*'),
         supabase.from('bond_holders').select('employee_code, tier')
@@ -69,7 +79,6 @@ export default function Home() {
 
       if (bookingsRes.error) throw bookingsRes.error;
 
-      // 2. Process Data
       const processed = processMonthlyData(
         bookingsRes.data, 
         spotsRes.data, 
@@ -96,7 +105,6 @@ export default function Home() {
   };
 
   const formatMoney = (amount) => {
-      // Formats to 2 decimal places (e.g. 1,200.00)
       return (amount || 0).toLocaleString(undefined, { 
           minimumFractionDigits: 2, 
           maximumFractionDigits: 2 
@@ -115,7 +123,6 @@ export default function Home() {
     const monthEnd = new Date(year, month + 1, 0); 
     const daysInMonth = monthEnd.getDate();
 
-    // Logic: Free Parking if Management OR Bond Holder Tier 1/2
     const isFreeParking = (empCode, empType) => {
         if (empType === 'Management') return true;
         if (!empCode) return false;
@@ -123,7 +130,6 @@ export default function Home() {
         return holder && (holder.tier === 1 || holder.tier === 2);
     };
 
-    // Logic: Get Privilege Text
     const getPrivilegeText = (empCode) => {
         if (!empCode) return '-';
         const holder = bondHolders?.find(b => b.employee_code === empCode);
@@ -136,6 +142,7 @@ export default function Home() {
     
     const monthlyDetails = [];
     const newBookingsDetails = []; 
+    const expiredBookingsDetails = []; // <--- NEW ARRAY FOR 3.4
 
     let grandTotalRevenue = 0;
     let grandNetRevenue = 0;
@@ -161,7 +168,6 @@ export default function Home() {
         const privilegeText = getPrivilegeText(empCode);
 
         // --- A. MOVEMENT ---
-        // Beginning
         if (bStart < monthStart && bEnd >= monthStart) {
             beg.count++;
             const fee = price; 
@@ -170,7 +176,6 @@ export default function Home() {
             beg.net += net;
         }
 
-        // New
         if (bStart >= monthStart && bStart <= monthEnd) {
             newB.count++;
             const diffTime = monthEnd.getTime() - bStart.getTime();
@@ -188,7 +193,6 @@ export default function Home() {
             });
         }
 
-        // Expired
         if (bEnd >= monthStart && bEnd < monthEnd) {
             exp.count++;
             const diffTime = monthEnd.getTime() - bEnd.getTime();
@@ -198,6 +202,13 @@ export default function Home() {
 
             exp.total += lostFee;
             exp.net += lostNet;
+
+            // <--- PUSH TO EXPIRED LIST (3.4)
+            expiredBookingsDetails.push({
+                ...b,
+                start_date: b.booking_start,
+                end_date: b.booking_end
+            });
         }
 
         // --- B. MONTHLY TENANT DETAILS ---
@@ -221,8 +232,8 @@ export default function Home() {
                 display_days: daysOccupied,
                 display_total: totalFee,
                 display_net: netFee,
-                display_type: empType,        // Added
-                display_privilege: privilegeText // Added
+                display_type: empType,
+                display_privilege: privilegeText
             });
 
             if (bEnd >= reportCapDate && b.parking_spots?.spot_type === 'Reserved (Paid) Parking') {
@@ -257,6 +268,7 @@ export default function Home() {
         year: year,
         monthlyDetails,
         newBookingsDetails,
+        expiredBookingsDetails, // <--- RETURN NEW DATA
         movement: [
             { label: 'Beginning Balance', ...beg },
             { label: 'New Booking', ...newB },
@@ -280,12 +292,13 @@ export default function Home() {
     if (!reportData) return;
     const wb = XLSX.utils.book_new();
 
+    // Sheet 1: Tenant Details
     const ws1Data = reportData.monthlyDetails.map(item => ({
         "Lot ID": item.parking_spots?.lot_id,
         "Employee Code": item.employees?.employee_code,
         "Name": item.employees?.full_name,
-        "Type": item.display_type,          // <--- ADDED
-        "Privilege": item.display_privilege, // <--- ADDED
+        "Type": item.display_type,
+        "Privilege": item.display_privilege,
         "Start Date (Effective)": formatThaiDate(item.effective_start_date),
         "End Date (Effective)": formatThaiDate(item.effective_end_date),
         "Days": item.display_days,
@@ -295,6 +308,7 @@ export default function Home() {
     const ws1 = XLSX.utils.json_to_sheet(ws1Data);
     XLSX.utils.book_append_sheet(wb, ws1, "Tenant Details");
 
+    // Sheet 2: Summary
     const ws2Data = reportData.movement.map(m => ({
         "Description": m.label, 
         "Count": m.count, 
@@ -304,6 +318,7 @@ export default function Home() {
     const ws2 = XLSX.utils.json_to_sheet(ws2Data);
     XLSX.utils.book_append_sheet(wb, ws2, "Monthly Summary");
 
+    // Sheet 3: New Bookings
     const ws3Data = reportData.newBookingsDetails.map(item => ({
         "Code": item.employees?.employee_code,
         "Name": item.employees?.full_name,
@@ -315,6 +330,18 @@ export default function Home() {
     const ws3 = XLSX.utils.json_to_sheet(ws3Data);
     XLSX.utils.book_append_sheet(wb, ws3, "New Bookings");
 
+    // Sheet 4: Expired Bookings (NEW)
+    const ws4Data = reportData.expiredBookingsDetails.map(item => ({
+        "Code": item.employees?.employee_code,
+        "Name": item.employees?.full_name,
+        "Start": formatThaiDate(item.start_date),
+        "End": formatThaiDate(item.end_date),
+        "Lot": item.parking_spots?.lot_id,
+        "Plate": item.license_plate_used || item.employees?.license_plate
+    }));
+    const ws4 = XLSX.utils.json_to_sheet(ws4Data);
+    XLSX.utils.book_append_sheet(wb, ws4, "Expired Bookings");
+
     const fileName = `TurboParking_Report_${reportData.monthName}_${reportData.year}.xlsx`;
     const excelBuffer = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
     const data = new Blob([excelBuffer], {type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;charset=UTF-8'});
@@ -325,10 +352,9 @@ export default function Home() {
   const exportPDF = () => {
     if (!reportData) return;
     try {
-        const doc = new jsPDF('l'); // Landscape orientation
+        const doc = new jsPDF('l'); // Landscape
 
-        // 1. Register Thai Font (Sarabun)
-        // Ensure you have src/lib/ThaiFont.js with the Base64 string
+        // Font Setup
         doc.addFileToVFS("Sarabun-Regular.ttf", fontBase64);
         doc.addFont("Sarabun-Regular.ttf", "Sarabun", "normal");
         doc.setFont("Sarabun");
@@ -350,19 +376,15 @@ export default function Home() {
                 item.parking_spots?.lot_id,
                 item.employees?.employee_code,
                 item.employees?.full_name,
-                item.display_type,       // <--- ADDED
-                item.display_privilege,  // <--- ADDED
+                item.display_type,
+                item.display_privilege,
                 formatThaiDate(item.effective_start_date),
                 formatThaiDate(item.effective_end_date),
-                formatMoney(item.display_total), // <--- 2 DECIMAL
-                formatMoney(item.display_net)    // <--- 2 DECIMAL
+                formatMoney(item.display_total),
+                formatMoney(item.display_net)
             ]),
             theme: 'striped',
-            // 2. Apply Thai Font to Table
-            styles: { 
-                font: 'Sarabun', 
-                fontSize: 8 
-            }, 
+            styles: { font: 'Sarabun', fontSize: 8 }, 
             headStyles: { fillColor: [0, 45, 114] },
             columnStyles: {
                 7: { halign: 'right' },
@@ -412,6 +434,26 @@ export default function Home() {
             styles: { font: 'Sarabun' },
             headStyles: { fillColor: [250, 71, 134] }
         });
+
+        // --- 3.4 Expired Booking Details (NEW) ---
+        finalY = doc.lastAutoTable.finalY; 
+        doc.text("3.4 Expired Booking Details", 14, finalY + 15);
+        
+        autoTable(doc, {
+            startY: finalY + 20,
+            head: [['Code', 'Name', 'Start', 'End', 'Lot', 'Plate']],
+            body: reportData.expiredBookingsDetails.map(i => [
+                i.employees?.employee_code, 
+                i.employees?.full_name, 
+                formatThaiDate(i.start_date), 
+                formatThaiDate(i.end_date), 
+                i.parking_spots?.lot_id, 
+                i.license_plate_used || i.employees?.license_plate
+            ]),
+            theme: 'striped',
+            styles: { font: 'Sarabun' },
+            headStyles: { fillColor: [220, 38, 38] } // Red Header for Expired
+        });
         
         doc.save(`TurboParking_${reportData.monthName}.pdf`);
     } catch (err) {
@@ -449,8 +491,9 @@ export default function Home() {
                     <option 
                         key={i} 
                         value={i} 
-                        disabled={selectedYear === currentYear && i > currentMonth}
-                        className={selectedYear === currentYear && i > currentMonth ? "text-gray-300" : ""}
+                        // Disable future months logic adjusted for year
+                        disabled={selectedYear === currentRealYear && i > currentRealMonth}
+                        className={selectedYear === currentRealYear && i > currentRealMonth ? "text-gray-300" : ""}
                     >
                         {new Date(0, i).toLocaleString('default', {month: 'long'})}
                     </option>
@@ -459,6 +502,7 @@ export default function Home() {
         </div>
       </div>
 
+      {/* TABS */}
       <div className="grid grid-cols-3 bg-white p-1 rounded-xl border border-gray-200 shadow-sm">
         {[
             { id: 1, label: 'Booking Transactions', icon: Activity },
@@ -563,10 +607,11 @@ export default function Home() {
       {activeTab === 3 && (
         <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4">
             <div className="flex justify-end gap-3">
-                 <button onClick={exportExcel} className="flex items-center gap-2 bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 shadow-sm transition"><FileSpreadsheet size={18} /> Export Excel (3 Sheets)</button>
+                 <button onClick={exportExcel} className="flex items-center gap-2 bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 shadow-sm transition"><FileSpreadsheet size={18} /> Export Excel (4 Sheets)</button>
                  <button onClick={exportPDF} className="flex items-center gap-2 bg-red-600 text-white px-4 py-2 rounded-lg hover:bg-red-700 shadow-sm transition"><FileText size={18} /> Export PDF</button>
             </div>
 
+            {/* 3.1 Detail Report */}
             <Card className="p-6">
                 <h3 className="text-lg font-bold text-[#002D72] mb-4">3.1 Monthly Tenant Detail Report</h3>
                 <div className="overflow-x-auto">
@@ -604,6 +649,7 @@ export default function Home() {
                 </div>
             </Card>
 
+            {/* 3.2 Summary */}
             <Card className="p-6">
                 <h3 className="text-lg font-bold text-[#002D72] mb-4">3.2 Monthly Booking Summary</h3>
                 <table className="w-full text-left">
@@ -632,6 +678,7 @@ export default function Home() {
                 </table>
             </Card>
 
+            {/* 3.3 New Booking Details */}
             <Card className="p-6">
                 <h3 className="text-lg font-bold text-[#002D72] mb-4">3.3 New Booking Details</h3>
                 <div className="overflow-x-auto">
@@ -654,6 +701,38 @@ export default function Home() {
                                     <td className="py-3 px-4 font-medium">{row.employees?.full_name}</td>
                                     <td className="py-3 px-4">{formatThaiDate(row.start_date)}</td>
                                     <td className="py-3 px-4">{formatThaiDate(row.end_date)}</td>
+                                    <td className="py-3 px-4 font-bold">{row.parking_spots?.lot_id}</td>
+                                    <td className="py-3 px-4 text-gray-500">{row.license_plate_used || row.employees?.license_plate}</td>
+                                </tr>
+                             ))}
+                        </tbody>
+                    </table>
+                </div>
+            </Card>
+
+            {/* 3.4 Expired Booking Details (NEW) */}
+            <Card className="p-6">
+                <h3 className="text-lg font-bold text-red-600 mb-4">3.4 Expired Booking Details</h3>
+                <div className="overflow-x-auto">
+                    <table className="w-full text-left text-sm">
+                        <thead className="bg-red-50 border-b border-red-100 text-red-700">
+                            <tr>
+                                <th className="py-3 px-4">Employee Code</th>
+                                <th className="py-3 px-4">Full Name</th>
+                                <th className="py-3 px-4">Start Date</th>
+                                <th className="py-3 px-4">End Date</th>
+                                <th className="py-3 px-4">Lot ID</th>
+                                <th className="py-3 px-4">License Plate</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y">
+                            {reportData.expiredBookingsDetails.length === 0 ? <tr><td colSpan="6" className="p-4 text-center text-gray-400">No expired bookings this month.</td></tr> :
+                             reportData.expiredBookingsDetails.map((row, i) => (
+                                <tr key={i} className="hover:bg-red-50/50">
+                                    <td className="py-3 px-4 font-mono text-gray-600">{row.employees?.employee_code}</td>
+                                    <td className="py-3 px-4 font-medium">{row.employees?.full_name}</td>
+                                    <td className="py-3 px-4">{formatThaiDate(row.start_date)}</td>
+                                    <td className="py-3 px-4 text-red-600 font-bold">{formatThaiDate(row.end_date)}</td>
                                     <td className="py-3 px-4 font-bold">{row.parking_spots?.lot_id}</td>
                                     <td className="py-3 px-4 text-gray-500">{row.license_plate_used || row.employees?.license_plate}</td>
                                 </tr>

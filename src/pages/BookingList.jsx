@@ -45,12 +45,18 @@ export default function BookingList() {
             price
           )
         `)
-        // Filter out deleted items so they don't show in the list
-        .eq('is_deleted', false) 
-        .order('booking_start', { ascending: false });
+        .eq('is_deleted', false); // Filter out deleted items
 
       if (error) throw error;
-      setBookings(data || []);
+
+      // 1. LOGIC UPDATE: Order by Lot ID (Client-side for better alphanumeric sorting like A1, A2, A10)
+      const sortedData = (data || []).sort((a, b) => {
+        const lotA = a.parking_spots?.lot_id || '';
+        const lotB = b.parking_spots?.lot_id || '';
+        return lotA.localeCompare(lotB, undefined, { numeric: true, sensitivity: 'base' });
+      });
+
+      setBookings(sortedData);
 
     } catch (error) {
       console.error("Fetch Error:", error);
@@ -86,8 +92,47 @@ export default function BookingList() {
   };
 
   const saveEdit = async () => {
+    // Basic date validation
     if (editForm.booking_end < editForm.booking_start) {
         alert("Error: End Date cannot be before Start Date.");
+        return;
+    }
+
+    // 2. LOGIC UPDATE: Interval/Overlap Check
+    const currentBooking = bookings.find(b => b.id === editingId);
+    if (!currentBooking) return;
+
+    const currentLotId = currentBooking.parking_spots?.lot_id;
+    const newStart = new Date(editForm.booking_start);
+    const newEnd = new Date(editForm.booking_end);
+
+    // Check against all OTHER bookings
+    const hasConflict = bookings.some(b => {
+        // Skip the row we are currently editing
+        if (b.id === editingId) return false;
+        
+        // Skip different Lots (conflicts only matter on the same lot)
+        if (b.parking_spots?.lot_id !== currentLotId) return false;
+
+        const otherStart = new Date(b.booking_start);
+        const otherEnd = new Date(b.booking_end);
+
+        // Overlap Formula: (StartA <= EndB) and (EndA >= StartB)
+        // We set hours to ensure strict date comparison ignoring time
+        newStart.setHours(0,0,0,0); newEnd.setHours(0,0,0,0);
+        otherStart.setHours(0,0,0,0); otherEnd.setHours(0,0,0,0);
+
+        const isOverlapping = newStart <= otherEnd && newEnd >= otherStart;
+        
+        if (isOverlapping) {
+            console.log(`Conflict detected with Booking ID: ${b.id} on Lot ${currentLotId}`);
+        }
+        
+        return isOverlapping;
+    });
+
+    if (hasConflict) {
+        alert(`Cannot save: This date range overlaps with another booking for Lot ${currentLotId}.`);
         return;
     }
 
@@ -121,7 +166,6 @@ export default function BookingList() {
     if (!selectedBookingId) return;
 
     try {
-      // Soft Delete: We update 'is_deleted' to true instead of removing the row
       const { error } = await supabase
         .from('bookings')
         .update({ is_deleted: true })
@@ -129,7 +173,6 @@ export default function BookingList() {
 
       if (error) throw error;
 
-      // Remove from UI locally to avoid full re-fetch
       setBookings(prev => prev.filter(b => b.id !== selectedBookingId));
       setShowDeleteModal(false);
       setSelectedBookingId(null);
