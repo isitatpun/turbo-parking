@@ -40,7 +40,6 @@ export default function CarParkPage() {
       const { data: zonesData, error: zonesError } = await supabase
         .from('zones')
         .select('*')
-        // REVISED: Order by 'lot_code' (was code)
         .order('lot_code', { ascending: true });
       if (zonesError) throw zonesError;
 
@@ -85,33 +84,36 @@ export default function CarParkPage() {
   const handleLotCodeChange = (e) => {
       const inputCode = e.target.value.toUpperCase(); // Force Uppercase
       
-      // 1. REVISED: Look up using 'lot_code' instead of 'code'
       const matchedZone = zones.find(z => z.lot_code === inputCode);
 
-      // 2. Update State
       setFormData(prev => ({
           ...prev,
           lot_code: inputCode,
-          // Auto-fill description if match found
           zone_text: matchedZone ? matchedZone.name : '' 
       }));
   };
 
+  // --- UPDATED SAVE HANDLER WITH DUPLICATE CHECKS ---
   const handleSpotSave = async () => {
+    // 1. Basic Validation
     if (!formData.lot_code || !formData.spot_number) {
         alert("Please enter a Lot Code and Spot Number.");
         return;
     }
 
-    // Duplicate Check
-    const isDuplicate = spots.some(s => 
-        s.lot_code === formData.lot_code && 
-        String(s.spot_number) === String(formData.spot_number) &&
+    // 2. Generate ID Format immediately (e.g. A_005)
+    // This allows us to check the exact ID string against the database/state
+    const generatedLotId = `${formData.lot_code}_${String(formData.spot_number).padStart(3, '0')}`;
+
+    // 3. Client-Side Duplicate Check 
+    // (Checks currently visible/active spots to prevent instant duplicates)
+    const isDuplicateVisible = spots.some(s => 
+        s.lot_id === generatedLotId && 
         s.id !== editingId
     );
 
-    if (isDuplicate) {
-        alert(`Error: Spot ${formData.lot_code}-${formData.spot_number} already exists!`);
+    if (isDuplicateVisible) {
+        alert(`Error: Spot ${generatedLotId} already exists in the list!`);
         return;
     }
 
@@ -126,32 +128,39 @@ export default function CarParkPage() {
         updated_at: new Date() 
       };
 
-      // REVISED: Generate ID Format (e.g. A_005)
-      // lot_code + "_" + spot_number (padded to 3 digits)
-      const generatedLotId = `${spotData.lot_code}_${String(spotData.spot_number).padStart(3, '0')}`;
-
       if (editingId) {
         // Update: We also update lot_id in case numbering changed
         const { error } = await supabase.from('parking_spots')
             .update({ ...spotData, lot_id: generatedLotId })
             .eq('id', editingId);
+        
         if (error) throw error;
         alert("Updated successfully!");
+
       } else {
+        // Create
         const { error } = await supabase.from('parking_spots').insert([{ 
             ...spotData, 
             lot_id: generatedLotId, 
             is_active: true, 
             effective_from: new Date() 
         }]);
+
         if (error) throw error;
         alert("Created successfully!");
       }
 
       setSpotModalOpen(false);
       fetchData(); 
+
     } catch (error) {
-      alert("Error saving: " + error.message);
+      // 4. Server-Side Duplicate Check (Catch Postgres Error 23505)
+      // This catches spots that exist in the DB but are inactive (hidden from view)
+      if (error.code === '23505') {
+          alert(`Cannot create ${generatedLotId}: This Lot ID already exists in the database (it might be inactive/deleted).`);
+      } else {
+          alert("Error saving: " + error.message);
+      }
     }
   };
 

@@ -13,7 +13,7 @@ export default function Booking() {
   const [spots, setSpots] = useState([]);
   const [bookings, setBookings] = useState([]); 
   const [employees, setEmployees] = useState([]);
-  const [vehicles, setVehicles] = useState({}); // Map: emp_code -> license_plate
+  const [vehicles, setVehicles] = useState({}); // Map: emp_code -> "plate1, plate2"
   const [loading, setLoading] = useState(true);
 
   // Filters
@@ -68,10 +68,18 @@ export default function Booking() {
 
       if (vehError) throw vehError;
 
-      // Create Vehicle Map
+      // Create Vehicle Map (Handle multiple plates per employee)
       const vMap = {};
       vehData?.forEach(v => {
-        vMap[v.employee_code] = v.license_plate;
+        if (v.employee_code) {
+          if (vMap[v.employee_code]) {
+            // Append with comma if already exists
+            vMap[v.employee_code] = `${vMap[v.employee_code]}, ${v.license_plate}`;
+          } else {
+            // Initialize
+            vMap[v.employee_code] = v.license_plate;
+          }
+        }
       });
       setVehicles(vMap);
 
@@ -228,7 +236,7 @@ export default function Booking() {
         return;
       }
 
-      // License Plate Lookup
+      // License Plate Lookup (Uses the comma separated string if multiple exist)
       const licensePlate = vehicles[bookingForm.employee_code] || '-';
 
       const newBooking = {
@@ -324,14 +332,14 @@ export default function Booking() {
                 <table className="w-full text-left text-sm whitespace-nowrap">
                 <thead className="bg-[#002D72] text-white">
                     <tr>
-                        <th className="py-3 px-4 rounded-tl-xl">Lot ID</th>
-                        <th className="py-3 px-4">Zone</th>
-                        <th className="py-3 px-4">Type</th>
-                        <th className="py-3 px-4">Current Employee</th>
-                        <th className="py-3 px-4">License Plate</th>
-                        <th className="py-3 px-4">Start Date</th>
-                        <th className="py-3 px-4">Current End</th>
-                        <th className="py-3 px-4">Next Booking</th>
+                        <th className="py-3 px-4 rounded-tl-xl text-center">Lot ID</th>
+                        <th className="py-3 px-4 text-center">Zone</th>
+                        <th className="py-3 px-4 text-center">Type</th>
+                        <th className="py-3 px-4 text-center">Current Employee</th>
+                        <th className="py-3 px-4 text-center">License Plate</th>
+                        <th className="py-3 px-4 text-center">Start Date</th>
+                        <th className="py-3 px-4 text-center">Current End</th>
+                        <th className="py-3 px-4 text-center">Next Booking</th>
                         <th className="py-3 px-4 text-center">Status</th>
                         <th className="py-3 px-4 rounded-tr-xl text-center">Action</th>
                     </tr>
@@ -352,41 +360,41 @@ export default function Booking() {
 
                         return (
                             <tr key={spot.id} className="border-b last:border-0 hover:bg-gray-50 transition">
-                                <td className="py-3 px-4 font-bold text-[#002D72]">
+                                <td className="py-3 px-4 font-bold text-[#002D72] text-center">
                                     {spot.lot_id}
                                 </td>
-                                <td className="py-3 px-4">{spot.zone_text}</td>
-                                <td className="py-3 px-4">
+                                <td className="py-3 px-4 text-center">{spot.zone_text}</td>
+                                <td className="py-3 px-4 text-center">
                                     <span className={`px-2 py-1 rounded text-xs border ${spot.spot_type.includes('EV') ? 'bg-green-50 text-green-700 border-green-200' : 'bg-gray-100 text-gray-600 border-gray-200'}`}>
                                         {spot.spot_type}
                                     </span>
                                 </td>
                                 <td className="py-3 px-4">
                                     {booking ? (
-                                        <div className='flex flex-col'>
+                                        <div className='flex flex-col items-center'>
                                             <span className="font-mono text-[#002D72] font-medium">{empInfo?.employee_code || '-'}</span>
                                             {empInfo?.full_name_eng && (
                                                 <span className="text-xs text-gray-500 truncate max-w-[150px]">{empInfo.full_name_eng}</span>
                                             )}
                                         </div>
-                                    ) : '-'}
+                                    ) : <div className="text-center">-</div>}
                                 </td>
-                                <td className="py-3 px-4 font-medium text-gray-700">
+                                <td className="py-3 px-4 font-medium text-gray-700 text-center max-w-[200px] whitespace-normal">
                                     {booking ? plateDisplay : '-'}
                                 </td>
-                                <td className="py-3 px-4 text-gray-600">
+                                <td className="py-3 px-4 text-gray-600 text-center">
                                     {booking ? formatDate(booking.booking_start) : '-'}
                                 </td>
-                                <td className="py-3 px-4 text-gray-600">
+                                <td className="py-3 px-4 text-gray-600 text-center">
                                     {booking ? (
                                         <span className={booking.booking_end.startsWith('9999') ? 'text-blue-600 font-bold' : ''}>
                                             {booking.booking_end.startsWith('9999') ? 'Indefinite' : formatDate(booking.booking_end)}
                                         </span>
                                     ) : '-'}
                                 </td>
-                                <td className="py-3 px-4 text-gray-500">
+                                <td className="py-3 px-4 text-gray-500 text-center">
                                     {next ? (
-                                        <div className="flex flex-col text-xs">
+                                        <div className="flex flex-col text-xs items-center">
                                             <span className="font-bold text-[#FA4786]">{formatDate(next.booking_start)}</span>
                                             <span>({next.central_employee_from_databrick?.employee_code})</span>
                                         </div>
