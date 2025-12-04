@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
-import { Card, Modal, Badge } from '../components/UI';
+import { Card, Modal } from '../components/UI';
 import { Plus, Edit2, Trash2, Car, Search, Building2, User, X } from 'lucide-react';
 
 export default function Employees() {
@@ -14,7 +14,7 @@ export default function Employees() {
   const [searchCentralTerm, setSearchCentralTerm] = useState('');
   const [centralResults, setCentralResults] = useState([]);
   const [isSearchingCentral, setIsSearchingCentral] = useState(false);
-   
+    
   const [selectedEmployee, setSelectedEmployee] = useState(null); 
   
   // Changed: Array for multiple plates (Max 5)
@@ -249,19 +249,18 @@ export default function Employees() {
         {loading ? (
           <div className="p-8 text-center text-gray-500">Loading records...</div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left">
-              <thead className="bg-gray-50 border-b text-gray-600">
+          <div className="overflow-x-auto rounded-lg">
+            <table className="w-full text-left border-collapse">
+              <thead className="bg-[#002D72] text-white">
                 <tr>
-                  <th className="py-3 px-4">Employee</th>
-                  <th className="py-3 px-4">Org Info</th>
-                  {/* Changed Header to Position Level */}
-                  <th className="py-3 px-4">Position Level</th>
-                  <th className="py-3 px-4">License Plate(s)</th>
-                  <th className="py-3 px-4 text-right">Action</th>
+                  <th className="py-3 px-4 text-center rounded-tl-lg">Employee</th>
+                  <th className="py-3 px-4 text-center">Org Info</th>
+                  <th className="py-3 px-4 text-center">Position Level</th>
+                  <th className="py-3 px-4 text-center">License Plate(s)</th>
+                  <th className="py-3 px-4 text-center rounded-tr-lg">Action</th>
                 </tr>
               </thead>
-              <tbody>
+              <tbody className="divide-y divide-gray-100">
                 {filteredRecords.length === 0 && (
                   <tr>
                     <td colSpan="5" className="p-6 text-center text-gray-400">
@@ -270,7 +269,7 @@ export default function Employees() {
                   </tr>
                 )}
                 {filteredRecords.map((rec) => (
-                  <tr key={rec.employee_code} className="border-b hover:bg-gray-50 transition align-top">
+                  <tr key={rec.employee_code} className="hover:bg-gray-50 transition align-top">
                     {/* Employee Column */}
                     <td className="py-3 px-4">
                       <div className="font-bold text-[#002D72]">{rec.full_name_eng}</div>
@@ -287,17 +286,17 @@ export default function Employees() {
                       <div className="text-gray-400 pl-5 text-xs">{rec.department_name}</div>
                     </td>
 
-                    {/* Position Level Column - Simplified */}
-                    <td className="py-3 px-4">
-                       <span className="text-sm font-medium text-gray-700">{rec.pos_level}</span>
+                    {/* Position Level Column */}
+                    <td className="py-3 px-4 text-center">
+                        <span className="text-sm font-medium text-gray-700 bg-gray-100 px-2 py-1 rounded-full">{rec.pos_level}</span>
                     </td>
 
-                    {/* Plate Column - Minimal Apple Style - Multiple Items */}
+                    {/* Plate Column - Updated to Car Icon */}
                     <td className="py-3 px-4">
-                      <div className="flex flex-wrap gap-2">
+                      <div className="flex flex-wrap gap-2 justify-start">
                         {rec.vehicles.map((v) => (
                            <div key={v.id} className="group relative bg-white border border-gray-200 text-gray-800 text-sm font-semibold px-3 py-1 rounded-full shadow-sm flex items-center gap-2 hover:border-[#FA4786] transition-colors cursor-default">
-                              <span className="text-xs text-gray-400">TH</span>
+                              <Car size={16} className="text-[#FA4786]" />
                               {v.license_plate}
                               {/* Quick Delete X on hover */}
                               <button 
@@ -312,11 +311,11 @@ export default function Employees() {
                     </td>
 
                     {/* Action Column */}
-                    <td className="py-3 px-4 text-right">
-                       {/* Opens modal pre-filled to add MORE plates */}
-                       <button onClick={() => handleOpenEdit(rec)} className="text-blue-600 hover:bg-blue-50 p-2 rounded-lg transition" title="Add another plate">
+                    <td className="py-3 px-4 text-center">
+                        {/* Opens modal pre-filled to add MORE plates */}
+                        <button onClick={() => handleOpenEdit(rec)} className="text-blue-600 hover:bg-blue-50 p-2 rounded-lg transition" title="Add another plate">
                           <Edit2 size={16}/>
-                       </button>
+                        </button>
                     </td>
                   </tr>
                 ))}
@@ -338,7 +337,7 @@ export default function Employees() {
           
           {/* 1. EMPLOYEE SELECTION */}
           <div className="bg-gray-50 p-4 rounded-xl border border-gray-200">
-            <label className="block text-sm font-bold text-[#002D72] mb-2 flex items-center gap-2">
+            <label className="flex items-center gap-2 text-sm font-bold text-[#002D72] mb-2">
               <User size={16}/> Employee Selection
             </label>
             
@@ -397,7 +396,7 @@ export default function Employees() {
 
           {/* 2. LICENSE PLATE INPUTS (Dynamic List) */}
           <div>
-            <label className="block text-sm font-bold text-[#002D72] mb-2 flex items-center justify-between">
+            <label className="flex items-center justify-between text-sm font-bold text-[#002D72] mb-2">
               <span className="flex items-center gap-2"><Car size={16}/> License Plate(s)</span>
               <span className="text-xs font-normal text-gray-400">Max 5 per submission</span>
             </label>

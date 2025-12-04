@@ -64,8 +64,8 @@ export default function Home() {
     try {
       setLoading(true);
 
-      // 1. Fetch Bookings with linked Central Employee data (NOT employees table)
-      // 2. Fetch Spots
+      // 1. Fetch Bookings with linked Central Employee data
+      // 2. Fetch Spots (We fetch ALL, then filter in JS based on dates)
       // 3. Fetch Bond Holders
       // 4. Fetch Vehicles (for license plates)
       const [bookingsRes, spotsRes, bondRes, vehiclesRes] = await Promise.all([
@@ -136,7 +136,6 @@ export default function Home() {
         vehicleMap[v.employee_code] = v.license_plate;
     });
 
-    // UPDATED LOGIC: Check pos_level instead of employee_type
     const isFreeParking = (empCode, posLevel) => {
         if (posLevel === 'Management') return true; 
         if (!empCode) return false;
@@ -168,6 +167,7 @@ export default function Home() {
         reportCapDate = todayMidnight;
     }
 
+    // --- PROCESS BOOKINGS ---
     bookings?.forEach(b => {
         const bStart = toMidnight(b.booking_start);
         const bEnd = toMidnight(b.booking_end);
@@ -175,15 +175,11 @@ export default function Home() {
         const price = b.parking_spots?.price || 0;
         const dailyRate = price / daysInMonth;
         
-        // UPDATED MAPPING: Use central_employee_from_databrick data
         const employeeData = b.central_employee_from_databrick;
         const empCode = employeeData?.employee_code;
-        const empName = employeeData?.full_name_eng || '-'; // Mapped to full_name_eng
-        const empPosLevel = employeeData?.pos_level || '-'; // Mapped to pos_level
+        const empName = employeeData?.full_name_eng || '-'; 
+        const empPosLevel = employeeData?.pos_level || '-'; 
         
-        // LICENSE PLATE LOGIC
-        // 1. Check specific plate used in booking
-        // 2. Fallback to default active vehicle from table
         const actualPlate = b.license_plate_used || vehicleMap[empCode] || '-';
         
         const isFree = isFreeParking(empCode, empPosLevel);
@@ -192,7 +188,6 @@ export default function Home() {
         // Common Object for details
         const detailObj = {
             ...b,
-            // Add flattened fields for easier export
             emp_code: empCode,
             emp_name: empName,
             emp_pos: empPosLevel,
@@ -257,7 +252,7 @@ export default function Home() {
                 display_days: daysOccupied,
                 display_total: totalFee,
                 display_net: netFee,
-                display_type: empPosLevel, // Shows pos_level
+                display_type: empPosLevel,
                 display_privilege: privilegeText
             });
 
@@ -273,13 +268,31 @@ export default function Home() {
         net: beg.net + newB.net + exp.net
     };
 
+    // --- PROCESS SPOTS INVENTORY (WITH VALIDITY CHECK) ---
     const inventory = {};
     let grandTotalSpots = 0;
     let totalReservedSpots = 0; 
 
     allSpots?.forEach(spot => {
+        // --- 1. CHECK SPOT VALIDITY FOR THIS MONTH ---
+        // A spot is valid if:
+        // - It started (effective_from) BEFORE the end of this month
+        // - AND (It is not expired OR It expired AFTER the start of this month)
+        
+        const effectiveFrom = spot.effective_from ? new Date(spot.effective_from) : new Date(0); // Default to long ago
+        const expiredAt = spot.expired_at ? new Date(spot.expired_at) : null; // Null means active forever
+
+        // Logic: Did this spot exist during the selected month?
+        const isActiveInMonth = effectiveFrom <= monthEnd && (!expiredAt || expiredAt >= monthStart);
+
+        if (!isActiveInMonth) {
+            return; // SKIP this spot, do not count it
+        }
+
+        // --- 2. COUNT IF VALID ---
         grandTotalSpots++;
         if (spot.spot_type === 'Reserved (Paid) Parking') totalReservedSpots++;
+        
         const key = `${spot.zone_text}-${spot.spot_type}`; 
         if (!inventory[key]) inventory[key] = { zone: spot.zone_text, type: spot.spot_type, count: 0 };
         inventory[key].count++;
