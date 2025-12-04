@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
 import { Card, Badge, Modal } from '../components/UI';
-import { Plus, Edit2, Trash2, Map, AlertTriangle, Settings } from 'lucide-react';
+import { Plus, Edit2, Trash2 } from 'lucide-react';
 
 export default function CarParkPage() {
   const [spots, setSpots] = useState([]); 
@@ -32,17 +32,20 @@ export default function CarParkPage() {
         .from('parking_spots')
         .select('*')
         .eq('is_active', true)
-        .order('lot_id', { ascending: true });
+        // Sort by lot_code then spot_number naturally
+        .order('lot_code', { ascending: true })
+        .order('spot_number', { ascending: true });
       if (spotsError) throw spotsError;
 
       const { data: zonesData, error: zonesError } = await supabase
         .from('zones')
         .select('*')
-        .order('code', { ascending: true });
+        // REVISED: Order by 'lot_code' (was code)
+        .order('lot_code', { ascending: true });
       if (zonesError) throw zonesError;
 
-      setSpots(spotsData);
-      setZones(zonesData);
+      setSpots(spotsData || []);
+      setZones(zonesData || []);
 
     } catch (error) {
       alert('Error loading data: ' + error.message);
@@ -55,9 +58,9 @@ export default function CarParkPage() {
   const handleAddSpotClick = () => {
       setEditingId(null);
       setFormData({ 
-          lot_code: '', // Start empty
+          lot_code: '', 
           spot_number: '', 
-          zone_text: '', // Start empty
+          zone_text: '', 
           roof_type: 'No', 
           spot_type: 'General Parking', 
           price: '' 
@@ -78,18 +81,18 @@ export default function CarParkPage() {
     setSpotModalOpen(true);
   };
 
-  // --- NEW: HANDLE MANUAL LOT CODE INPUT WITH AUTO-LOOKUP ---
+  // --- HANDLE MANUAL LOT CODE INPUT WITH AUTO-LOOKUP ---
   const handleLotCodeChange = (e) => {
       const inputCode = e.target.value.toUpperCase(); // Force Uppercase
       
-      // 1. Try to find a matching zone
-      const matchedZone = zones.find(z => z.code === inputCode);
+      // 1. REVISED: Look up using 'lot_code' instead of 'code'
+      const matchedZone = zones.find(z => z.lot_code === inputCode);
 
       // 2. Update State
       setFormData(prev => ({
           ...prev,
           lot_code: inputCode,
-          // If match found, auto-fill description. If not, clear it or leave it.
+          // Auto-fill description if match found
           zone_text: matchedZone ? matchedZone.name : '' 
       }));
   };
@@ -123,13 +126,18 @@ export default function CarParkPage() {
         updated_at: new Date() 
       };
 
+      // REVISED: Generate ID Format (e.g. A_005)
+      // lot_code + "_" + spot_number (padded to 3 digits)
+      const generatedLotId = `${spotData.lot_code}_${String(spotData.spot_number).padStart(3, '0')}`;
+
       if (editingId) {
-        const { error } = await supabase.from('parking_spots').update(spotData).eq('id', editingId);
+        // Update: We also update lot_id in case numbering changed
+        const { error } = await supabase.from('parking_spots')
+            .update({ ...spotData, lot_id: generatedLotId })
+            .eq('id', editingId);
         if (error) throw error;
         alert("Updated successfully!");
       } else {
-        const generatedLotId = `${spotData.lot_code}${spotData.spot_number}`;
-        
         const { error } = await supabase.from('parking_spots').insert([{ 
             ...spotData, 
             lot_id: generatedLotId, 
@@ -173,7 +181,6 @@ export default function CarParkPage() {
       <div className="flex justify-between items-center">
         <h2 className="text-2xl font-bold text-[#002D72]">Car Park Spots</h2>
         
-        {/* ADD SPOT BUTTON */}
         <button 
             onClick={handleAddSpotClick}
             className="bg-[#FA4786] text-white px-4 py-2 rounded-xl flex items-center gap-2 hover:bg-pink-600 shadow-lg shadow-pink-200 transition"
@@ -205,14 +212,15 @@ export default function CarParkPage() {
                     {spots.map((row) => (
                     <tr key={row.id} className="border-b hover:bg-gray-50 transition">
                         <td className="py-3 px-4 font-bold text-[#002D72]">
-                            {row.lot_id || `${row.lot_code} ${row.spot_number}`}
+                            {/* Display the formatted ID */}
+                            {row.lot_id}
                         </td>
                         <td className="py-3 px-4">{row.zone_text}</td>
                         <td className="py-3 px-4">{row.roof_type ? 'Yes' : 'No'}</td>
                         <td className="py-3 px-4">
                             <Badge color={getBadgeColor(row.spot_type)}>{row.spot_type}</Badge>
                         </td>
-                        <td className="py-3 px-4">{row.price.toLocaleString()}</td>
+                        <td className="py-3 px-4">{row.price ? row.price.toLocaleString() : '0'}</td>
                         <td className="py-3 px-4 text-right flex justify-end gap-2">
                             <button onClick={() => handleEditSpotClick(row)} className="text-blue-600 hover:bg-blue-50 p-2 rounded-lg"><Edit2 size={16}/></button>
                             <button onClick={() => handleDeleteSpot(row.id)} className="text-red-500 hover:bg-red-50 p-2 rounded-lg"><Trash2 size={16}/></button>
@@ -243,7 +251,7 @@ export default function CarParkPage() {
                 type="text" 
                 className="w-full border rounded-lg p-2 uppercase focus:ring-2 focus:ring-[#FA4786] outline-none" 
                 value={formData.lot_code} 
-                onChange={handleLotCodeChange} // <--- LOOKUP LOGIC ATTACHED
+                onChange={handleLotCodeChange} 
                 placeholder="e.g. A"
             />
           </div>
@@ -256,7 +264,7 @@ export default function CarParkPage() {
                 className="w-full border rounded-lg p-2 focus:ring-2 focus:ring-[#FA4786] outline-none" 
                 value={formData.spot_number} 
                 onChange={e=>setFormData({...formData, spot_number: e.target.value})} 
-                placeholder="e.g. 101"
+                placeholder="e.g. 1"
             />
           </div>
 

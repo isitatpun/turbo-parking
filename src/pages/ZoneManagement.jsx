@@ -8,7 +8,9 @@ export default function ZoneManagement() {
   const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
   const [editingId, setEditingId] = useState(null);
-  const [formData, setFormData] = useState({ code: '', name: '' });
+  
+  // Revised: Changed 'code' to 'lot_code'
+  const [formData, setFormData] = useState({ lot_code: '', name: '' });
 
   useEffect(() => {
     fetchZones();
@@ -20,7 +22,7 @@ export default function ZoneManagement() {
       const { data, error } = await supabase
         .from('zones')
         .select('*')
-        .order('code', { ascending: true });
+        .order('lot_code', { ascending: true }); // Revised: Order by lot_code
       
       if (error) throw error;
       setZones(data || []);
@@ -32,16 +34,17 @@ export default function ZoneManagement() {
   };
 
   const handleSave = async () => {
-    if (!formData.code || !formData.name) return alert("Please fill all fields");
+    // Revised: Validation checks lot_code
+    if (!formData.lot_code || !formData.name) return alert("Please fill all fields");
 
-    // --- NEW: DUPLICATE CHECK ---
+    // --- DUPLICATE CHECK ---
     const isDuplicate = zones.some(z => 
-        z.code.toLowerCase() === formData.code.toLowerCase() && 
-        z.id !== editingId // Ignore self if editing
+        z.lot_code.toLowerCase() === formData.lot_code.toLowerCase() && 
+        z.id !== editingId 
     );
 
     if (isDuplicate) {
-        alert(`Error: Zone Code "${formData.code}" already exists.`);
+        alert(`Error: Zone Code "${formData.lot_code}" already exists.`);
         return;
     }
 
@@ -57,9 +60,8 @@ export default function ZoneManagement() {
       setModalOpen(false);
       fetchZones();
     } catch (error) {
-      // Catch database unique constraint error if frontend check fails
       if (error.code === '23505') {
-          alert(`Error: Zone Code "${formData.code}" already exists (Database Constraint).`);
+          alert(`Error: Zone Code "${formData.lot_code}" already exists (Database Constraint).`);
       } else {
           alert("Error: " + error.message);
       }
@@ -80,10 +82,11 @@ export default function ZoneManagement() {
   const openModal = (zone = null) => {
       if (zone) {
           setEditingId(zone.id);
-          setFormData({ code: zone.code, name: zone.name });
+          // Revised: Map existing data to lot_code
+          setFormData({ lot_code: zone.lot_code, name: zone.name });
       } else {
           setEditingId(null);
-          setFormData({ code: '', name: '' });
+          setFormData({ lot_code: '', name: '' });
       }
       setModalOpen(true);
   };
@@ -113,7 +116,8 @@ export default function ZoneManagement() {
                 <tbody className="divide-y">
                     {zones.map((z) => (
                         <tr key={z.id} className="hover:bg-gray-50">
-                            <td className="py-3 px-4 font-bold text-[#002D72]">{z.code}</td>
+                            {/* Revised: Display lot_code */}
+                            <td className="py-3 px-4 font-bold text-[#002D72]">{z.lot_code}</td>
                             <td className="py-3 px-4">{z.name}</td>
                             <td className="py-3 px-4 text-right flex justify-end gap-2">
                                 <button onClick={() => openModal(z)} className="text-blue-600 hover:bg-blue-50 p-2 rounded-lg"><Edit2 size={16}/></button>
@@ -137,9 +141,10 @@ export default function ZoneManagement() {
                 <label className="block text-sm font-medium text-gray-700 mb-1">Zone Code (e.g. A, B, ZA)</label>
                 <input 
                     type="text" 
-                    className="w-full border rounded-lg p-2 uppercase" // Visual cue for code
-                    value={formData.code} 
-                    onChange={e => setFormData({...formData, code: e.target.value.toUpperCase()})} // Force uppercase
+                    className="w-full border rounded-lg p-2 uppercase" 
+                    value={formData.lot_code} 
+                    // Revised: Update lot_code state
+                    onChange={e => setFormData({...formData, lot_code: e.target.value.toUpperCase()})} 
                     placeholder="Enter unique code"
                 />
             </div>

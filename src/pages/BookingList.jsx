@@ -26,6 +26,7 @@ export default function BookingList() {
       setLoading(true);
       setErrorMsg(null);
 
+      // UPDATED: Added employee_type, start_date, end_date to query
       const { data, error } = await supabase
         .from('bookings')
         .select(`
@@ -38,7 +39,10 @@ export default function BookingList() {
           employees (
             employee_code,
             full_name,
-            license_plate
+            license_plate,
+            employee_type,
+            start_date,
+            end_date
           ),
           parking_spots (
             lot_id,
@@ -98,10 +102,30 @@ export default function BookingList() {
         return;
     }
 
-    // 2. LOGIC UPDATE: Interval/Overlap Check
     const currentBooking = bookings.find(b => b.id === editingId);
     if (!currentBooking) return;
 
+    // --- NEW VALIDATION: Check Employee Contract Dates ---
+    const employee = currentBooking.employees;
+    if (employee) {
+        // Check if new end date exceeds contract end date
+        if (employee.end_date && editForm.booking_end !== '9999-12-31' && new Date(editForm.booking_end) > new Date(employee.end_date)) {
+            const confirmExceed = window.confirm(
+                `Warning: The new booking end date (${editForm.booking_end}) is after the employee's contract end date (${employee.end_date}). Update anyway?`
+            );
+            if (!confirmExceed) return;
+        }
+
+        // Check indefinite booking against contract end date
+        if (editForm.booking_end === '9999-12-31' && employee.end_date) {
+            const confirmIndefinite = window.confirm(
+                `Warning: You are setting an indefinite booking, but this employee has a contract end date of ${employee.end_date}. Update anyway?`
+            );
+            if (!confirmIndefinite) return;
+        }
+    }
+
+    // 2. LOGIC UPDATE: Interval/Overlap Check
     const currentLotId = currentBooking.parking_spots?.lot_id;
     const newStart = new Date(editForm.booking_start);
     const newEnd = new Date(editForm.booking_end);
@@ -255,6 +279,7 @@ export default function BookingList() {
                     <tr>
                         <th className="py-3 px-4">Employee Code</th>
                         <th className="py-3 px-4">Full Name</th>
+                        <th className="py-3 px-4">Type</th> {/* ADDED COLUMN */}
                         <th className="py-3 px-4">Lot ID</th>
                         <th className="py-3 px-4">License Plate</th>
                         <th className="py-3 px-4">Start Date</th>
@@ -265,9 +290,9 @@ export default function BookingList() {
                 </thead>
                 <tbody className="divide-y">
                     {loading ? (
-                        <tr><td colSpan="8" className="p-8 text-center text-gray-500">Loading...</td></tr>
+                        <tr><td colSpan="9" className="p-8 text-center text-gray-500">Loading...</td></tr>
                     ) : filteredBookings.length === 0 ? (
-                        <tr><td colSpan="8" className="p-8 text-center text-gray-400">No bookings found.</td></tr>
+                        <tr><td colSpan="9" className="p-8 text-center text-gray-400">No bookings found.</td></tr>
                     ) : filteredBookings.map((row) => {
                         const status = getStatus(row.booking_start, row.booking_end);
                         const isEditing = editingId === row.id;
@@ -280,6 +305,11 @@ export default function BookingList() {
                             <tr key={row.id} className="hover:bg-gray-50">
                                 <td className="py-3 px-4 font-mono text-blue-600">{row.employees?.employee_code || "N/A"}</td>
                                 <td className="py-3 px-4 font-medium">{row.employees?.full_name || "Unknown"}</td>
+                                <td className="py-3 px-4">
+                                    <span className="bg-gray-100 text-gray-600 text-xs px-2 py-1 rounded">
+                                        {row.employees?.employee_type || 'Staff'}
+                                    </span>
+                                </td>
                                 <td className="py-3 px-4 font-bold text-gray-700">{displayLot}</td>
                                 <td className="py-3 px-4 text-gray-500">{displayPlate}</td>
                                 

@@ -64,25 +64,32 @@ export default function Home() {
     try {
       setLoading(true);
 
-      const [bookingsRes, spotsRes, bondRes] = await Promise.all([
+      // 1. Fetch Bookings with linked Central Employee data
+      // 2. Fetch Spots
+      // 3. Fetch Bond Holders
+      // 4. Fetch Vehicles (New requirement)
+      const [bookingsRes, spotsRes, bondRes, vehiclesRes] = await Promise.all([
         supabase.from('bookings')
           .select(`
             *, 
-            employees (employee_code, full_name, license_plate, employee_type), 
+            central_employee_from_databrick (employee_code, full_name_eng, pos_level), 
             parking_spots (lot_id, price, zone_text, spot_type)
           `)
           .eq('is_deleted', false),
         
         supabase.from('parking_spots').select('*'),
-        supabase.from('bond_holders').select('employee_code, tier')
+        supabase.from('bond_holders').select('employee_code, tier'),
+        supabase.from('employee_vehicles').select('employee_code, license_plate').eq('is_active', true)
       ]);
 
       if (bookingsRes.error) throw bookingsRes.error;
+      if (vehiclesRes.error) throw vehiclesRes.error;
 
       const processed = processMonthlyData(
         bookingsRes.data, 
         spotsRes.data, 
-        bondRes.data, 
+        bondRes.data,
+        vehiclesRes.data, // Pass vehicles
         selectedYear, 
         selectedMonth
       );
@@ -118,13 +125,22 @@ export default function Home() {
   };
 
   // --- CORE LOGIC ENGINE ---
-  const processMonthlyData = (bookings, allSpots, bondHolders, year, month) => {
+  const processMonthlyData = (bookings, allSpots, bondHolders, vehicles, year, month) => {
     const monthStart = new Date(year, month, 1);
     const monthEnd = new Date(year, month + 1, 0); 
     const daysInMonth = monthEnd.getDate();
 
-    const isFreeParking = (empCode, empType) => {
-        if (empType === 'Management') return true;
+    // Create a vehicle lookup map: { employee_code: 'PLATE-123' }
+    const vehicleMap = {};
+    vehicles?.forEach(v => {
+        // If an employee has multiple, this takes the last one found. 
+        // Logic can be adjusted if there's a 'primary' flag.
+        vehicleMap[v.employee_code] = v.license_plate;
+    });
+
+    // UPDATED LOGIC: Check pos_level instead of employee_type
+    const isFreeParking = (empCode, posLevel) => {
+        if (posLevel === 'Management') return true; 
         if (!empCode) return false;
         const holder = bondHolders?.find(b => b.employee_code === empCode);
         return holder && (holder.tier === 1 || holder.tier === 2);
@@ -142,7 +158,7 @@ export default function Home() {
     
     const monthlyDetails = [];
     const newBookingsDetails = []; 
-    const expiredBookingsDetails = []; // <--- NEW ARRAY FOR 3.4
+    const expiredBookingsDetails = [];
 
     let grandTotalRevenue = 0;
     let grandNetRevenue = 0;
@@ -161,11 +177,31 @@ export default function Home() {
         const price = b.parking_spots?.price || 0;
         const dailyRate = price / daysInMonth;
         
-        const empCode = b.employees?.employee_code;
-        const empType = b.employees?.employee_type || '-';
+        // UPDATED MAPPING: Use central_employee_from_databrick
+        const employeeData = b.central_employee_from_databrick;
+        const empCode = employeeData?.employee_code;
+        const empName = employeeData?.full_name_eng || '-'; // Changed to full_name_eng
+        const empPosLevel = employeeData?.pos_level || '-'; // Changed to pos_level
         
-        const isFree = isFreeParking(empCode, empType);
+        // LICENSE PLATE LOGIC
+        // 1. Check specific plate used in booking
+        // 2. Fallback to default active vehicle from table
+        const actualPlate = b.license_plate_used || vehicleMap[empCode] || '-';
+        
+        const isFree = isFreeParking(empCode, empPosLevel);
         const privilegeText = getPrivilegeText(empCode);
+
+        // Common Object for details
+        const detailObj = {
+            ...b,
+            // Add flattened fields for easier export
+            emp_code: empCode,
+            emp_name: empName,
+            emp_pos: empPosLevel,
+            display_plate: actualPlate,
+            start_date: b.booking_start,
+            end_date: b.booking_end
+        };
 
         // --- A. MOVEMENT ---
         if (bStart < monthStart && bEnd >= monthStart) {
@@ -186,11 +222,7 @@ export default function Home() {
             newB.total += fee;
             newB.net += net;
 
-            newBookingsDetails.push({
-                ...b,
-                start_date: b.booking_start,
-                end_date: b.booking_end
-            });
+            newBookingsDetails.push(detailObj);
         }
 
         if (bEnd >= monthStart && bEnd < monthEnd) {
@@ -203,12 +235,7 @@ export default function Home() {
             exp.total += lostFee;
             exp.net += lostNet;
 
-            // <--- PUSH TO EXPIRED LIST (3.4)
-            expiredBookingsDetails.push({
-                ...b,
-                start_date: b.booking_start,
-                end_date: b.booking_end
-            });
+            expiredBookingsDetails.push(detailObj);
         }
 
         // --- B. MONTHLY TENANT DETAILS ---
@@ -226,13 +253,13 @@ export default function Home() {
             grandNetRevenue += netFee;
 
             monthlyDetails.push({
-                ...b,
+                ...detailObj,
                 effective_start_date: effectiveStart,
                 effective_end_date: effectiveEnd,
                 display_days: daysOccupied,
                 display_total: totalFee,
                 display_net: netFee,
-                display_type: empType,
+                display_type: empPosLevel, // Shows pos_level
                 display_privilege: privilegeText
             });
 
@@ -268,7 +295,7 @@ export default function Home() {
         year: year,
         monthlyDetails,
         newBookingsDetails,
-        expiredBookingsDetails, // <--- RETURN NEW DATA
+        expiredBookingsDetails, 
         movement: [
             { label: 'Beginning Balance', ...beg },
             { label: 'New Booking', ...newB },
@@ -295,9 +322,9 @@ export default function Home() {
     // Sheet 1: Tenant Details
     const ws1Data = reportData.monthlyDetails.map(item => ({
         "Lot ID": item.parking_spots?.lot_id,
-        "Employee Code": item.employees?.employee_code,
-        "Name": item.employees?.full_name,
-        "Type": item.display_type,
+        "Employee Code": item.emp_code,
+        "Name": item.emp_name,
+        "Level": item.emp_pos, // Changed label to Level
         "Privilege": item.display_privilege,
         "Start Date (Effective)": formatThaiDate(item.effective_start_date),
         "End Date (Effective)": formatThaiDate(item.effective_end_date),
@@ -320,24 +347,24 @@ export default function Home() {
 
     // Sheet 3: New Bookings
     const ws3Data = reportData.newBookingsDetails.map(item => ({
-        "Code": item.employees?.employee_code,
-        "Name": item.employees?.full_name,
+        "Code": item.emp_code,
+        "Name": item.emp_name,
         "Start": formatThaiDate(item.start_date),
         "End": formatThaiDate(item.end_date),
         "Lot": item.parking_spots?.lot_id,
-        "Plate": item.license_plate_used || item.employees?.license_plate
+        "Plate": item.display_plate
     }));
     const ws3 = XLSX.utils.json_to_sheet(ws3Data);
     XLSX.utils.book_append_sheet(wb, ws3, "New Bookings");
 
-    // Sheet 4: Expired Bookings (NEW)
+    // Sheet 4: Expired Bookings
     const ws4Data = reportData.expiredBookingsDetails.map(item => ({
-        "Code": item.employees?.employee_code,
-        "Name": item.employees?.full_name,
+        "Code": item.emp_code,
+        "Name": item.emp_name,
         "Start": formatThaiDate(item.start_date),
         "End": formatThaiDate(item.end_date),
         "Lot": item.parking_spots?.lot_id,
-        "Plate": item.license_plate_used || item.employees?.license_plate
+        "Plate": item.display_plate
     }));
     const ws4 = XLSX.utils.json_to_sheet(ws4Data);
     XLSX.utils.book_append_sheet(wb, ws4, "Expired Bookings");
@@ -371,12 +398,12 @@ export default function Home() {
         
         autoTable(doc, {
             startY: 45,
-            head: [['Lot', 'Code', 'Name', 'Type', 'Privilege', 'Start', 'End', 'Total', 'Net']],
+            head: [['Lot', 'Code', 'Name', 'Level', 'Privilege', 'Start', 'End', 'Total', 'Net']],
             body: reportData.monthlyDetails.map(item => [
                 item.parking_spots?.lot_id,
-                item.employees?.employee_code,
-                item.employees?.full_name,
-                item.display_type,
+                item.emp_code,
+                item.emp_name,
+                item.emp_pos,
                 item.display_privilege,
                 formatThaiDate(item.effective_start_date),
                 formatThaiDate(item.effective_end_date),
@@ -423,19 +450,19 @@ export default function Home() {
             startY: finalY + 20,
             head: [['Code', 'Name', 'Start', 'End', 'Lot', 'Plate']],
             body: reportData.newBookingsDetails.map(i => [
-                i.employees?.employee_code, 
-                i.employees?.full_name, 
+                i.emp_code, 
+                i.emp_name, 
                 formatThaiDate(i.start_date), 
                 formatThaiDate(i.end_date), 
                 i.parking_spots?.lot_id, 
-                i.license_plate_used || i.employees?.license_plate
+                i.display_plate
             ]),
             theme: 'striped',
             styles: { font: 'Sarabun' },
             headStyles: { fillColor: [250, 71, 134] }
         });
 
-        // --- 3.4 Expired Booking Details (NEW) ---
+        // --- 3.4 Expired Booking Details ---
         finalY = doc.lastAutoTable.finalY; 
         doc.text("3.4 Expired Booking Details", 14, finalY + 15);
         
@@ -443,16 +470,16 @@ export default function Home() {
             startY: finalY + 20,
             head: [['Code', 'Name', 'Start', 'End', 'Lot', 'Plate']],
             body: reportData.expiredBookingsDetails.map(i => [
-                i.employees?.employee_code, 
-                i.employees?.full_name, 
+                i.emp_code, 
+                i.emp_name, 
                 formatThaiDate(i.start_date), 
                 formatThaiDate(i.end_date), 
                 i.parking_spots?.lot_id, 
-                i.license_plate_used || i.employees?.license_plate
+                i.display_plate
             ]),
             theme: 'striped',
             styles: { font: 'Sarabun' },
-            headStyles: { fillColor: [220, 38, 38] } // Red Header for Expired
+            headStyles: { fillColor: [220, 38, 38] } 
         });
         
         doc.save(`TurboParking_${reportData.monthName}.pdf`);
@@ -491,7 +518,6 @@ export default function Home() {
                     <option 
                         key={i} 
                         value={i} 
-                        // Disable future months logic adjusted for year
                         disabled={selectedYear === currentRealYear && i > currentRealMonth}
                         className={selectedYear === currentRealYear && i > currentRealMonth ? "text-gray-300" : ""}
                     >
@@ -621,7 +647,7 @@ export default function Home() {
                                 <th className="py-3 px-4">Lot ID</th>
                                 <th className="py-3 px-4">Emp Code</th>
                                 <th className="py-3 px-4">Name</th>
-                                <th className="py-3 px-4">Type</th>
+                                <th className="py-3 px-4">Pos Level</th> {/* Changed Header */}
                                 <th className="py-3 px-4">Privilege</th>
                                 <th className="py-3 px-4">Start (Effective)</th>
                                 <th className="py-3 px-4">End (Effective)</th>
@@ -634,9 +660,9 @@ export default function Home() {
                             reportData.monthlyDetails.map((row, i) => (
                                 <tr key={i} className="hover:bg-gray-50">
                                     <td className="py-3 px-4 font-bold">{row.parking_spots?.lot_id}</td>
-                                    <td className="py-3 px-4 font-mono">{row.employees?.employee_code}</td>
-                                    <td className="py-3 px-4">{row.employees?.full_name}</td>
-                                    <td className="py-3 px-4 text-gray-600">{row.display_type}</td>
+                                    <td className="py-3 px-4 font-mono">{row.emp_code}</td>
+                                    <td className="py-3 px-4">{row.emp_name}</td>
+                                    <td className="py-3 px-4 text-gray-600">{row.emp_pos}</td>
                                     <td className="py-3 px-4 text-blue-600 text-xs font-semibold">{row.display_privilege}</td>
                                     <td className="py-3 px-4 text-gray-500">{formatThaiDate(row.effective_start_date)}</td>
                                     <td className="py-3 px-4 text-gray-500">{formatThaiDate(row.effective_end_date)}</td>
@@ -697,12 +723,12 @@ export default function Home() {
                             {reportData.newBookingsDetails.length === 0 ? <tr><td colSpan="6" className="p-4 text-center text-gray-400">No new bookings this month.</td></tr> :
                              reportData.newBookingsDetails.map((row, i) => (
                                 <tr key={i} className="hover:bg-gray-50">
-                                    <td className="py-3 px-4 font-mono text-blue-600">{row.employees?.employee_code}</td>
-                                    <td className="py-3 px-4 font-medium">{row.employees?.full_name}</td>
+                                    <td className="py-3 px-4 font-mono text-blue-600">{row.emp_code}</td>
+                                    <td className="py-3 px-4 font-medium">{row.emp_name}</td>
                                     <td className="py-3 px-4">{formatThaiDate(row.start_date)}</td>
                                     <td className="py-3 px-4">{formatThaiDate(row.end_date)}</td>
                                     <td className="py-3 px-4 font-bold">{row.parking_spots?.lot_id}</td>
-                                    <td className="py-3 px-4 text-gray-500">{row.license_plate_used || row.employees?.license_plate}</td>
+                                    <td className="py-3 px-4 text-gray-500">{row.display_plate}</td>
                                 </tr>
                              ))}
                         </tbody>
@@ -710,7 +736,7 @@ export default function Home() {
                 </div>
             </Card>
 
-            {/* 3.4 Expired Booking Details (NEW) */}
+            {/* 3.4 Expired Booking Details */}
             <Card className="p-6">
                 <h3 className="text-lg font-bold text-red-600 mb-4">3.4 Expired Booking Details</h3>
                 <div className="overflow-x-auto">
@@ -729,12 +755,12 @@ export default function Home() {
                             {reportData.expiredBookingsDetails.length === 0 ? <tr><td colSpan="6" className="p-4 text-center text-gray-400">No expired bookings this month.</td></tr> :
                              reportData.expiredBookingsDetails.map((row, i) => (
                                 <tr key={i} className="hover:bg-red-50/50">
-                                    <td className="py-3 px-4 font-mono text-gray-600">{row.employees?.employee_code}</td>
-                                    <td className="py-3 px-4 font-medium">{row.employees?.full_name}</td>
+                                    <td className="py-3 px-4 font-mono text-gray-600">{row.emp_code}</td>
+                                    <td className="py-3 px-4 font-medium">{row.emp_name}</td>
                                     <td className="py-3 px-4">{formatThaiDate(row.start_date)}</td>
                                     <td className="py-3 px-4 text-red-600 font-bold">{formatThaiDate(row.end_date)}</td>
                                     <td className="py-3 px-4 font-bold">{row.parking_spots?.lot_id}</td>
-                                    <td className="py-3 px-4 text-gray-500">{row.license_plate_used || row.employees?.license_plate}</td>
+                                    <td className="py-3 px-4 text-gray-500">{row.display_plate}</td>
                                 </tr>
                              ))}
                         </tbody>

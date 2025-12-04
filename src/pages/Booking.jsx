@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
 import { Card, Badge, Modal } from '../components/UI';
-import { Calendar, SquarePen, Filter, CheckCircle, AlertCircle, Search } from 'lucide-react';
+import { Calendar, SquarePen, Filter, CheckCircle, AlertCircle, Search, User } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 
 export default function Booking() {
@@ -42,21 +42,41 @@ export default function Booking() {
     try {
       setLoading(true);
 
-      const { data: spotsData } = await supabase
+      // 1. Fetch Spots
+      const { data: spotsData, error: spotsError } = await supabase
         .from('parking_spots')
         .select('*')
         .eq('is_active', true)
         .order('lot_id', { ascending: true });
 
-      const { data: empData } = await supabase
+      if (spotsError) throw spotsError;
+
+      // 2. Fetch Employees (Updated for New Structure)
+      // Added: employee_type, start_date, end_date based on new schema image
+      const { data: empData, error: empError } = await supabase
         .from('employees')
-        .select('id, employee_code, full_name, license_plate')
+        .select('id, employee_code, full_name, license_plate, employee_type, start_date, end_date')
         .eq('is_active', true);
 
-      const { data: bookingData } = await supabase
+      if (empError) throw empError;
+
+      // 3. Fetch Bookings
+      // Note: This relies on a Foreign Key existing between bookings.employee_id and employees.id
+      const { data: bookingData, error: bookingError } = await supabase
         .from('bookings')
-        .select(`*, employees (employee_code, full_name, license_plate)`)
-        .gte('booking_end', selectedDate); 
+        .select(`
+          *,
+          employees (
+            employee_code,
+            full_name,
+            license_plate,
+            employee_type
+          )
+        `)
+        .gte('booking_end', selectedDate)
+        .eq('is_deleted', false); // Added safety check for soft deletes
+
+      if (bookingError) throw bookingError;
 
       setSpots(spotsData || []);
       setEmployees(empData || []);
@@ -82,6 +102,7 @@ export default function Booking() {
 
     const searchDate = activeBooking ? activeBooking.booking_end : selectedDate;
     
+    // Find next booking that isn't the current one
     const nextBooking = bookings
         .filter(b => b.spot_id === spot.id && b.booking_start > searchDate)
         .sort((a, b) => new Date(a.booking_start) - new Date(b.booking_start))[0];
@@ -100,7 +121,7 @@ export default function Booking() {
 
   // --- 3. FILTER EMPLOYEES ---
   const filteredEmployees = employees.filter(emp => 
-    emp.employee_code.includes(empSearch) || 
+    emp.employee_code.toLowerCase().includes(empSearch.toLowerCase()) || 
     emp.full_name.toLowerCase().includes(empSearch.toLowerCase())
   );
 
@@ -118,6 +139,7 @@ export default function Booking() {
   };
 
   const handleBookingSave = async () => {
+    // Basic Validation
     if (!bookingForm.employee_id || !bookingForm.start_date) {
         alert("Please select an employee and start date.");
         return;
@@ -135,11 +157,34 @@ export default function Booking() {
         return;
     }
 
+    // --- NEW VALIDATION: Check Employee Contract Dates ---
+    const selectedEmp = employees.find(e => e.id === bookingForm.employee_id);
+    
+    if (selectedEmp) {
+      // If employee has a contract end date, ensure booking doesn't exceed it
+      if (selectedEmp.end_date && !bookingForm.is_indefinite && new Date(bookingForm.end_date) > new Date(selectedEmp.end_date)) {
+        const confirmExceed = window.confirm(
+          `Warning: The booking end date (${bookingForm.end_date}) is after the employee's contract end date (${selectedEmp.end_date}). Continue?`
+        );
+        if (!confirmExceed) return;
+      }
+
+      // If booking is indefinite but employee has an end date
+      if (bookingForm.is_indefinite && selectedEmp.end_date) {
+        const confirmIndefinite = window.confirm(
+          `Warning: You are setting an indefinite booking, but this employee has a contract end date of ${selectedEmp.end_date}. Continue?`
+        );
+        if (!confirmIndefinite) return;
+      }
+    }
+
     try {
+      // Check for Spot Conflicts
       const { data: conflicts, error: conflictError } = await supabase
         .from('bookings')
         .select('id')
         .eq('spot_id', targetSpot.id)
+        .eq('is_deleted', false) // Ensure we don't count deleted bookings
         .lte('booking_start', finalEndDate)
         .gte('booking_end', bookingForm.start_date);
 
@@ -150,7 +195,6 @@ export default function Booking() {
         return;
       }
 
-      const selectedEmp = employees.find(e => e.id === bookingForm.employee_id);
       const licensePlate = selectedEmp?.license_plate || '-';
 
       const newBooking = {
@@ -159,7 +203,8 @@ export default function Booking() {
         license_plate_used: licensePlate,
         booking_start: bookingForm.start_date,
         booking_end: finalEndDate,
-        status: 'confirmed'
+        status: 'confirmed',
+        is_deleted: false
       };
 
       const { error } = await supabase.from('bookings').insert([newBooking]);
@@ -240,7 +285,7 @@ export default function Booking() {
 
       {/* TABLE */}
       <Card>
-        {loading ? <div className="p-12 text-center text-gray-400">Loading...</div> : (
+        {loading ? <div className="p-12 text-center text-gray-400">Loading data...</div> : (
             <div className="overflow-auto">
                 <table className="w-full text-left text-sm whitespace-nowrap">
                 <thead className="bg-[#002D72] text-white">
@@ -276,8 +321,16 @@ export default function Booking() {
                                         {spot.spot_type}
                                     </span>
                                 </td>
-                                <td className="py-3 px-4 font-mono text-[#002D72] font-medium bg-gray-50/50">
-                                    {booking ? booking.employees?.employee_code : '-'}
+                                <td className="py-3 px-4">
+                                    {booking ? (
+                                        <div className='flex flex-col'>
+                                            <span className="font-mono text-[#002D72] font-medium">{booking.employees?.employee_code}</span>
+                                            {/* Show Full Name if available */}
+                                            {booking.employees?.full_name && (
+                                                <span className="text-xs text-gray-500 truncate max-w-[120px]">{booking.employees.full_name}</span>
+                                            )}
+                                        </div>
+                                    ) : '-'}
                                 </td>
                                 <td className="py-3 px-4 font-medium text-gray-700">
                                     {booking ? booking.employees?.license_plate : '-'}
@@ -357,26 +410,28 @@ export default function Booking() {
                     />
                 </div>
 
-                <select 
-                    className="w-full border border-gray-300 rounded-xl px-3 py-2.5 outline-none focus:ring-2 focus:ring-[#FA4786] bg-white"
-                    value={bookingForm.employee_id}
-                    onChange={(e) => setBookingForm({...bookingForm, employee_id: e.target.value})}
-                    size={filteredEmployees.length > 5 ? 5 : 1}
-                >
-                    <option value="">-- Click to Select --</option>
-                    {filteredEmployees.map(emp => (
-                        <option key={emp.id} value={emp.id}>
-                            {emp.employee_code} - {emp.full_name}
-                        </option>
-                    ))}
-                    {filteredEmployees.length === 0 && <option disabled>No employees found</option>}
-                </select>
-                
-                {empSearch && (
-                    <p className="text-xs text-gray-400 mt-1 text-right">
-                        Found {filteredEmployees.length} result(s)
-                    </p>
-                )}
+                <div className="max-h-48 overflow-y-auto border border-gray-200 rounded-xl bg-white">
+                    {filteredEmployees.length === 0 ? (
+                        <div className="p-3 text-sm text-gray-400 text-center">No employees found</div>
+                    ) : (
+                        filteredEmployees.map(emp => (
+                            <div 
+                                key={emp.id} 
+                                onClick={() => setBookingForm({...bookingForm, employee_id: emp.id})}
+                                className={`px-3 py-2 text-sm cursor-pointer border-b last:border-0 flex justify-between items-center hover:bg-pink-50 ${bookingForm.employee_id === emp.id ? 'bg-pink-50 border-l-4 border-l-[#FA4786]' : ''}`}
+                            >
+                                <div>
+                                    <div className="font-bold text-[#002D72]">{emp.employee_code} - {emp.full_name}</div>
+                                    <div className="text-xs text-gray-500 flex gap-2">
+                                        <span className="bg-gray-100 px-1 rounded">{emp.employee_type || 'Staff'}</span>
+                                        {emp.license_plate && <span>🚗 {emp.license_plate}</span>}
+                                    </div>
+                                </div>
+                                {bookingForm.employee_id === emp.id && <CheckCircle size={16} className="text-[#FA4786]"/>}
+                            </div>
+                        ))
+                    )}
+                </div>
             </div>
 
             <div className="grid grid-cols-2 gap-4">
@@ -396,9 +451,7 @@ export default function Booking() {
                         type="date" 
                         className={`w-full border border-gray-300 rounded-xl px-3 py-2 outline-none focus:ring-2 focus:ring-[#FA4786] ${bookingForm.is_indefinite ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : ''}`}
                         value={bookingForm.end_date}
-                        /* --- ADDED LOGIC HERE --- */
                         min={bookingForm.start_date}
-                        /* ------------------------ */
                         onChange={(e) => setBookingForm({...bookingForm, end_date: e.target.value})}
                         disabled={bookingForm.is_indefinite}
                     />
