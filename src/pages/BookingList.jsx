@@ -5,6 +5,7 @@ import { Search, Edit, X, Save, AlertTriangle, Trash2, Infinity as InfinityIcon 
 
 export default function BookingList() {
   const [bookings, setBookings] = useState([]);
+  const [vehicles, setVehicles] = useState({}); // Store vehicle map
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
@@ -26,35 +27,49 @@ export default function BookingList() {
       setLoading(true);
       setErrorMsg(null);
 
-      // UPDATED: Added employee_type, start_date, end_date to query
-      const { data, error } = await supabase
-        .from('bookings')
-        .select(`
-          id,
-          booking_start,
-          booking_end,
-          license_plate_used,
-          status,
-          is_deleted,
-          employees (
-            employee_code,
-            full_name,
-            license_plate,
-            employee_type,
-            start_date,
-            end_date
-          ),
-          parking_spots (
-            lot_id,
-            price
-          )
-        `)
-        .eq('is_deleted', false); // Filter out deleted items
+      // 1. Fetch Bookings with linked Central Employee data
+      // Note: We intentionally DO NOT fetch start_date/resignation_date from employee table
+      // because booking dates are independent (from the Add Page).
+      const [bookingsRes, vehiclesRes] = await Promise.all([
+        supabase
+          .from('bookings')
+          .select(`
+            id,
+            booking_start,
+            booking_end,
+            license_plate_used,
+            status,
+            is_deleted,
+            central_employee_from_databrick (
+              employee_code,
+              full_name_eng,
+              pos_level
+            ),
+            parking_spots (
+              lot_id,
+              price
+            )
+          `)
+          .eq('is_deleted', false),
+        
+        supabase
+          .from('employee_vehicles')
+          .select('employee_code, license_plate')
+          .eq('is_active', true)
+      ]);
 
-      if (error) throw error;
+      if (bookingsRes.error) throw bookingsRes.error;
+      if (vehiclesRes.error) throw vehiclesRes.error;
 
-      // 1. LOGIC UPDATE: Order by Lot ID (Client-side for better alphanumeric sorting like A1, A2, A10)
-      const sortedData = (data || []).sort((a, b) => {
+      // Process Vehicles into a Map: { 'EMP001': 'AB-1234' }
+      const vMap = {};
+      vehiclesRes.data.forEach(v => {
+        vMap[v.employee_code] = v.license_plate;
+      });
+      setVehicles(vMap);
+
+      // Client-side Sort by Lot ID
+      const sortedData = (bookingsRes.data || []).sort((a, b) => {
         const lotA = a.parking_spots?.lot_id || '';
         const lotB = b.parking_spots?.lot_id || '';
         return lotA.localeCompare(lotB, undefined, { numeric: true, sensitivity: 'base' });
@@ -86,6 +101,7 @@ export default function BookingList() {
   const startEdit = (booking) => {
     setEditingId(booking.id);
     setEditForm({
+        // Standardize date string YYYY-MM-DD
         booking_start: booking.booking_start ? booking.booking_start.split('T')[0] : '',
         booking_end: booking.booking_end ? booking.booking_end.split('T')[0] : ''
     });
@@ -105,53 +121,26 @@ export default function BookingList() {
     const currentBooking = bookings.find(b => b.id === editingId);
     if (!currentBooking) return;
 
-    // --- NEW VALIDATION: Check Employee Contract Dates ---
-    const employee = currentBooking.employees;
-    if (employee) {
-        // Check if new end date exceeds contract end date
-        if (employee.end_date && editForm.booking_end !== '9999-12-31' && new Date(editForm.booking_end) > new Date(employee.end_date)) {
-            const confirmExceed = window.confirm(
-                `Warning: The new booking end date (${editForm.booking_end}) is after the employee's contract end date (${employee.end_date}). Update anyway?`
-            );
-            if (!confirmExceed) return;
-        }
-
-        // Check indefinite booking against contract end date
-        if (editForm.booking_end === '9999-12-31' && employee.end_date) {
-            const confirmIndefinite = window.confirm(
-                `Warning: You are setting an indefinite booking, but this employee has a contract end date of ${employee.end_date}. Update anyway?`
-            );
-            if (!confirmIndefinite) return;
-        }
-    }
-
-    // 2. LOGIC UPDATE: Interval/Overlap Check
+    // Interval/Overlap Check
     const currentLotId = currentBooking.parking_spots?.lot_id;
     const newStart = new Date(editForm.booking_start);
     const newEnd = new Date(editForm.booking_end);
 
-    // Check against all OTHER bookings
+    // Check against all OTHER bookings to prevent double booking on the same spot
     const hasConflict = bookings.some(b => {
-        // Skip the row we are currently editing
         if (b.id === editingId) return false;
-        
-        // Skip different Lots (conflicts only matter on the same lot)
         if (b.parking_spots?.lot_id !== currentLotId) return false;
 
         const otherStart = new Date(b.booking_start);
         const otherEnd = new Date(b.booking_end);
 
-        // Overlap Formula: (StartA <= EndB) and (EndA >= StartB)
-        // We set hours to ensure strict date comparison ignoring time
         newStart.setHours(0,0,0,0); newEnd.setHours(0,0,0,0);
         otherStart.setHours(0,0,0,0); otherEnd.setHours(0,0,0,0);
 
         const isOverlapping = newStart <= otherEnd && newEnd >= otherStart;
-        
         if (isOverlapping) {
             console.log(`Conflict detected with Booking ID: ${b.id} on Lot ${currentLotId}`);
         }
-        
         return isOverlapping;
     });
 
@@ -207,9 +196,11 @@ export default function BookingList() {
   };
 
   const filteredBookings = bookings.filter(b => {
+    const emp = b.central_employee_from_databrick;
     const searchLower = searchTerm.toLowerCase();
-    const code = b.employees?.employee_code || '';
-    const name = b.employees?.full_name?.toLowerCase() || '';
+    
+    const code = emp?.employee_code || '';
+    const name = emp?.full_name_eng?.toLowerCase() || '';
     const lot = b.parking_spots?.lot_id?.toLowerCase() || '';
     
     return code.includes(searchTerm) || name.includes(searchLower) || lot.includes(searchLower);
@@ -279,7 +270,7 @@ export default function BookingList() {
                     <tr>
                         <th className="py-3 px-4">Employee Code</th>
                         <th className="py-3 px-4">Full Name</th>
-                        <th className="py-3 px-4">Type</th> {/* ADDED COLUMN */}
+                        <th className="py-3 px-4">Pos Level</th>
                         <th className="py-3 px-4">Lot ID</th>
                         <th className="py-3 px-4">License Plate</th>
                         <th className="py-3 px-4">Start Date</th>
@@ -297,23 +288,28 @@ export default function BookingList() {
                         const status = getStatus(row.booking_start, row.booking_end);
                         const isEditing = editingId === row.id;
                         
+                        const emp = row.central_employee_from_databrick;
+                        const empCode = emp?.employee_code;
+                        
                         const isIndefinite = row.booking_end && row.booking_end.startsWith('9999');
-                        const displayPlate = row.license_plate_used || row.employees?.license_plate || "-";
+                        
+                        // Fallback logic: Use booking plate, otherwise check vehicle map
+                        const displayPlate = row.license_plate_used || vehicles[empCode] || "-";
                         const displayLot = row.parking_spots?.lot_id || "-";
 
                         return (
                             <tr key={row.id} className="hover:bg-gray-50">
-                                <td className="py-3 px-4 font-mono text-blue-600">{row.employees?.employee_code || "N/A"}</td>
-                                <td className="py-3 px-4 font-medium">{row.employees?.full_name || "Unknown"}</td>
+                                <td className="py-3 px-4 font-mono text-blue-600">{empCode || "N/A"}</td>
+                                <td className="py-3 px-4 font-medium">{emp?.full_name_eng || "Unknown"}</td>
                                 <td className="py-3 px-4">
                                     <span className="bg-gray-100 text-gray-600 text-xs px-2 py-1 rounded">
-                                        {row.employees?.employee_type || 'Staff'}
+                                        {emp?.pos_level || '-'}
                                     </span>
                                 </td>
                                 <td className="py-3 px-4 font-bold text-gray-700">{displayLot}</td>
                                 <td className="py-3 px-4 text-gray-500">{displayPlate}</td>
                                 
-                                {/* START DATE */}
+                                {/* START DATE (From Bookings Table) */}
                                 <td className="py-3 px-4">
                                     {isEditing ? (
                                         <input 
@@ -327,7 +323,7 @@ export default function BookingList() {
                                     )}
                                 </td>
 
-                                {/* END DATE */}
+                                {/* END DATE (From Bookings Table) */}
                                 <td className="py-3 px-4">
                                     {isEditing ? (
                                         <div className="flex flex-col gap-1 items-start">

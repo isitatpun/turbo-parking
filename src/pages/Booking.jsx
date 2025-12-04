@@ -13,6 +13,7 @@ export default function Booking() {
   const [spots, setSpots] = useState([]);
   const [bookings, setBookings] = useState([]); 
   const [employees, setEmployees] = useState([]);
+  const [vehicles, setVehicles] = useState({}); // Map: emp_code -> license_plate
   const [loading, setLoading] = useState(true);
 
   // Filters
@@ -25,6 +26,7 @@ export default function Booking() {
   const [targetSpot, setTargetSpot] = useState(null);
   const [bookingForm, setBookingForm] = useState({
     employee_id: '',
+    employee_code: '', // Helper to find vehicle
     start_date: '',
     end_date: '',
     is_indefinite: false
@@ -51,30 +53,41 @@ export default function Booking() {
 
       if (spotsError) throw spotsError;
 
-      // 2. Fetch Employees (Updated for New Structure)
-      // Added: employee_type, start_date, end_date based on new schema image
+      // 2. Fetch Employees (New Table Structure)
       const { data: empData, error: empError } = await supabase
-        .from('employees')
-        .select('id, employee_code, full_name, license_plate, employee_type, start_date, end_date')
-        .eq('is_active', true);
+        .from('central_employee_from_databrick')
+        .select('employee_id, employee_code, full_name_eng, pos_level, start_date, resignation_effective_date');
 
       if (empError) throw empError;
 
-      // 3. Fetch Bookings
-      // Note: This relies on a Foreign Key existing between bookings.employee_id and employees.id
+      // 3. Fetch Vehicles (for License Plates)
+      const { data: vehData, error: vehError } = await supabase
+        .from('employee_vehicles')
+        .select('employee_code, license_plate')
+        .eq('is_active', true);
+
+      if (vehError) throw vehError;
+
+      // Create Vehicle Map
+      const vMap = {};
+      vehData?.forEach(v => {
+        vMap[v.employee_code] = v.license_plate;
+      });
+      setVehicles(vMap);
+
+      // 4. Fetch Bookings
       const { data: bookingData, error: bookingError } = await supabase
         .from('bookings')
         .select(`
           *,
-          employees (
+          central_employee_from_databrick (
             employee_code,
-            full_name,
-            license_plate,
-            employee_type
+            full_name_eng,
+            pos_level
           )
         `)
         .gte('booking_end', selectedDate)
-        .eq('is_deleted', false); // Added safety check for soft deletes
+        .eq('is_deleted', false);
 
       if (bookingError) throw bookingError;
 
@@ -91,18 +104,21 @@ export default function Booking() {
 
   // --- 2. DATA PROCESSING ---
   const uniqueZones = ['All', ...new Set(spots.map(s => s.zone_text))];
+  
+  // Strict usage of spot_type from parking_spots for the filter
   const uniqueTypes = ['All', ...new Set(spots.map(s => s.spot_type))].sort();
 
   const processedSpots = spots.map(spot => {
+    // Find active booking for this spot on the selected date
     const activeBooking = bookings.find(b => 
-        b.spot_id === spot.id && 
+        b.spot_id === spot.id && // Ensure mapping via spot_id (FK)
         b.booking_start <= selectedDate && 
         b.booking_end >= selectedDate
     );
 
+    // Logic to find the NEXT booking (future)
     const searchDate = activeBooking ? activeBooking.booking_end : selectedDate;
     
-    // Find next booking that isn't the current one
     const nextBooking = bookings
         .filter(b => b.spot_id === spot.id && b.booking_start > searchDate)
         .sort((a, b) => new Date(a.booking_start) - new Date(b.booking_start))[0];
@@ -119,10 +135,10 @@ export default function Booking() {
     return matchZone && matchType && matchStatus;
   });
 
-  // --- 3. FILTER EMPLOYEES ---
+  // --- 3. FILTER EMPLOYEES (Modal Search) ---
   const filteredEmployees = employees.filter(emp => 
-    emp.employee_code.toLowerCase().includes(empSearch.toLowerCase()) || 
-    emp.full_name.toLowerCase().includes(empSearch.toLowerCase())
+    (emp.employee_code || '').toLowerCase().includes(empSearch.toLowerCase()) || 
+    (emp.full_name_eng || '').toLowerCase().includes(empSearch.toLowerCase())
   );
 
   // --- 4. ACTIONS ---
@@ -131,6 +147,7 @@ export default function Booking() {
     setEmpSearch(''); 
     setBookingForm({
         employee_id: '',
+        employee_code: '',
         start_date: selectedDate, 
         end_date: '',
         is_indefinite: false
@@ -157,24 +174,15 @@ export default function Booking() {
         return;
     }
 
-    // --- NEW VALIDATION: Check Employee Contract Dates ---
-    const selectedEmp = employees.find(e => e.id === bookingForm.employee_id);
+    // --- WARNING ONLY: Check Contract Dates ---
+    const selectedEmp = employees.find(e => e.employee_id === bookingForm.employee_id);
     
     if (selectedEmp) {
-      // If employee has a contract end date, ensure booking doesn't exceed it
-      if (selectedEmp.end_date && !bookingForm.is_indefinite && new Date(bookingForm.end_date) > new Date(selectedEmp.end_date)) {
-        const confirmExceed = window.confirm(
-          `Warning: The booking end date (${bookingForm.end_date}) is after the employee's contract end date (${selectedEmp.end_date}). Continue?`
-        );
-        if (!confirmExceed) return;
-      }
-
-      // If booking is indefinite but employee has an end date
-      if (bookingForm.is_indefinite && selectedEmp.end_date) {
-        const confirmIndefinite = window.confirm(
-          `Warning: You are setting an indefinite booking, but this employee has a contract end date of ${selectedEmp.end_date}. Continue?`
-        );
-        if (!confirmIndefinite) return;
+      const contractEnd = selectedEmp.resignation_effective_date;
+      
+      if (contractEnd && !bookingForm.is_indefinite && new Date(finalEndDate) > new Date(contractEnd)) {
+        const confirm = window.confirm(`Warning: Booking ends after employee resignation (${contractEnd}). Continue?`);
+        if (!confirm) return;
       }
     }
 
@@ -183,8 +191,8 @@ export default function Booking() {
       const { data: conflicts, error: conflictError } = await supabase
         .from('bookings')
         .select('id')
-        .eq('spot_id', targetSpot.id)
-        .eq('is_deleted', false) // Ensure we don't count deleted bookings
+        .eq('spot_id', targetSpot.id) // check current spot
+        .eq('is_deleted', false) 
         .lte('booking_start', finalEndDate)
         .gte('booking_end', bookingForm.start_date);
 
@@ -195,11 +203,12 @@ export default function Booking() {
         return;
       }
 
-      const licensePlate = selectedEmp?.license_plate || '-';
+      // License Plate Lookup
+      const licensePlate = vehicles[bookingForm.employee_code] || '-';
 
       const newBooking = {
-        spot_id: targetSpot.id,
-        employee_id: bookingForm.employee_id,
+        spot_id: targetSpot.id, // Ensure this matches FK in bookings table
+        employee_id: bookingForm.employee_id, // Ensure this matches FK type (text/uuid)
         license_plate_used: licensePlate,
         booking_start: bookingForm.start_date,
         booking_end: finalEndDate,
@@ -310,10 +319,16 @@ export default function Booking() {
                         const booking = spot.activeBooking;
                         const next = spot.nextBooking;
 
+                        // Retrieve Employee Info from joined table
+                        const empInfo = booking?.central_employee_from_databrick;
+
+                        // License Plate logic: Use used plate -> fallback to Vehicle Map -> '-'
+                        const plateDisplay = booking?.license_plate_used || vehicles[empInfo?.employee_code] || '-';
+
                         return (
                             <tr key={spot.id} className="border-b last:border-0 hover:bg-gray-50 transition">
                                 <td className="py-3 px-4 font-bold text-[#002D72]">
-                                    {spot.lot_id || `${spot.lot_code} ${spot.spot_number}`}
+                                    {spot.lot_id}
                                 </td>
                                 <td className="py-3 px-4">{spot.zone_text}</td>
                                 <td className="py-3 px-4">
@@ -324,16 +339,15 @@ export default function Booking() {
                                 <td className="py-3 px-4">
                                     {booking ? (
                                         <div className='flex flex-col'>
-                                            <span className="font-mono text-[#002D72] font-medium">{booking.employees?.employee_code}</span>
-                                            {/* Show Full Name if available */}
-                                            {booking.employees?.full_name && (
-                                                <span className="text-xs text-gray-500 truncate max-w-[120px]">{booking.employees.full_name}</span>
+                                            <span className="font-mono text-[#002D72] font-medium">{empInfo?.employee_code || '-'}</span>
+                                            {empInfo?.full_name_eng && (
+                                                <span className="text-xs text-gray-500 truncate max-w-[150px]">{empInfo.full_name_eng}</span>
                                             )}
                                         </div>
                                     ) : '-'}
                                 </td>
                                 <td className="py-3 px-4 font-medium text-gray-700">
-                                    {booking ? booking.employees?.license_plate : '-'}
+                                    {booking ? plateDisplay : '-'}
                                 </td>
                                 <td className="py-3 px-4 text-gray-600">
                                     {booking ? formatDate(booking.booking_start) : '-'}
@@ -349,7 +363,7 @@ export default function Booking() {
                                     {next ? (
                                         <div className="flex flex-col text-xs">
                                             <span className="font-bold text-[#FA4786]">{formatDate(next.booking_start)}</span>
-                                            <span>({next.employees?.employee_code})</span>
+                                            <span>({next.central_employee_from_databrick?.employee_code})</span>
                                         </div>
                                     ) : <span className="text-gray-300">-</span>}
                                 </td>
@@ -414,22 +428,29 @@ export default function Booking() {
                     {filteredEmployees.length === 0 ? (
                         <div className="p-3 text-sm text-gray-400 text-center">No employees found</div>
                     ) : (
-                        filteredEmployees.map(emp => (
-                            <div 
-                                key={emp.id} 
-                                onClick={() => setBookingForm({...bookingForm, employee_id: emp.id})}
-                                className={`px-3 py-2 text-sm cursor-pointer border-b last:border-0 flex justify-between items-center hover:bg-pink-50 ${bookingForm.employee_id === emp.id ? 'bg-pink-50 border-l-4 border-l-[#FA4786]' : ''}`}
-                            >
-                                <div>
-                                    <div className="font-bold text-[#002D72]">{emp.employee_code} - {emp.full_name}</div>
-                                    <div className="text-xs text-gray-500 flex gap-2">
-                                        <span className="bg-gray-100 px-1 rounded">{emp.employee_type || 'Staff'}</span>
-                                        {emp.license_plate && <span>🚗 {emp.license_plate}</span>}
+                        filteredEmployees.map(emp => {
+                            const vehPlate = vehicles[emp.employee_code];
+                            return (
+                                <div 
+                                    key={emp.employee_id} 
+                                    onClick={() => setBookingForm({
+                                        ...bookingForm, 
+                                        employee_id: emp.employee_id,
+                                        employee_code: emp.employee_code
+                                    })}
+                                    className={`px-3 py-2 text-sm cursor-pointer border-b last:border-0 flex justify-between items-center hover:bg-pink-50 ${bookingForm.employee_id === emp.employee_id ? 'bg-pink-50 border-l-4 border-l-[#FA4786]' : ''}`}
+                                >
+                                    <div>
+                                        <div className="font-bold text-[#002D72]">{emp.employee_code} - {emp.full_name_eng}</div>
+                                        <div className="text-xs text-gray-500 flex gap-2">
+                                            <span className="bg-gray-100 px-1 rounded">{emp.pos_level || '-'}</span>
+                                            {vehPlate && <span>🚗 {vehPlate}</span>}
+                                        </div>
                                     </div>
+                                    {bookingForm.employee_id === emp.employee_id && <CheckCircle size={16} className="text-[#FA4786]"/>}
                                 </div>
-                                {bookingForm.employee_id === emp.id && <CheckCircle size={16} className="text-[#FA4786]"/>}
-                            </div>
-                        ))
+                            );
+                        })
                     )}
                 </div>
             </div>

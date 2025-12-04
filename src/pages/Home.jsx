@@ -64,10 +64,10 @@ export default function Home() {
     try {
       setLoading(true);
 
-      // 1. Fetch Bookings with linked Central Employee data
+      // 1. Fetch Bookings with linked Central Employee data (NOT employees table)
       // 2. Fetch Spots
       // 3. Fetch Bond Holders
-      // 4. Fetch Vehicles (New requirement)
+      // 4. Fetch Vehicles (for license plates)
       const [bookingsRes, spotsRes, bondRes, vehiclesRes] = await Promise.all([
         supabase.from('bookings')
           .select(`
@@ -89,7 +89,7 @@ export default function Home() {
         bookingsRes.data, 
         spotsRes.data, 
         bondRes.data,
-        vehiclesRes.data, // Pass vehicles
+        vehiclesRes.data, // Pass vehicles map
         selectedYear, 
         selectedMonth
       );
@@ -133,8 +133,6 @@ export default function Home() {
     // Create a vehicle lookup map: { employee_code: 'PLATE-123' }
     const vehicleMap = {};
     vehicles?.forEach(v => {
-        // If an employee has multiple, this takes the last one found. 
-        // Logic can be adjusted if there's a 'primary' flag.
         vehicleMap[v.employee_code] = v.license_plate;
     });
 
@@ -177,11 +175,11 @@ export default function Home() {
         const price = b.parking_spots?.price || 0;
         const dailyRate = price / daysInMonth;
         
-        // UPDATED MAPPING: Use central_employee_from_databrick
+        // UPDATED MAPPING: Use central_employee_from_databrick data
         const employeeData = b.central_employee_from_databrick;
         const empCode = employeeData?.employee_code;
-        const empName = employeeData?.full_name_eng || '-'; // Changed to full_name_eng
-        const empPosLevel = employeeData?.pos_level || '-'; // Changed to pos_level
+        const empName = employeeData?.full_name_eng || '-'; // Mapped to full_name_eng
+        const empPosLevel = employeeData?.pos_level || '-'; // Mapped to pos_level
         
         // LICENSE PLATE LOGIC
         // 1. Check specific plate used in booking
@@ -324,7 +322,7 @@ export default function Home() {
         "Lot ID": item.parking_spots?.lot_id,
         "Employee Code": item.emp_code,
         "Name": item.emp_name,
-        "Level": item.emp_pos, // Changed label to Level
+        "Level": item.emp_pos,
         "Privilege": item.display_privilege,
         "Start Date (Effective)": formatThaiDate(item.effective_start_date),
         "End Date (Effective)": formatThaiDate(item.effective_end_date),
@@ -647,7 +645,7 @@ export default function Home() {
                                 <th className="py-3 px-4">Lot ID</th>
                                 <th className="py-3 px-4">Emp Code</th>
                                 <th className="py-3 px-4">Name</th>
-                                <th className="py-3 px-4">Pos Level</th> {/* Changed Header */}
+                                <th className="py-3 px-4">Level</th> {/* Changed Header */}
                                 <th className="py-3 px-4">Privilege</th>
                                 <th className="py-3 px-4">Start (Effective)</th>
                                 <th className="py-3 px-4">End (Effective)</th>
