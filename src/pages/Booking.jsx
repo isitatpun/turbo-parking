@@ -136,10 +136,17 @@ export default function Booking() {
   });
 
   // --- 3. FILTER EMPLOYEES (Modal Search) ---
-  const filteredEmployees = employees.filter(emp => 
-    (emp.employee_code || '').toLowerCase().includes(empSearch.toLowerCase()) || 
-    (emp.full_name_eng || '').toLowerCase().includes(empSearch.toLowerCase())
-  );
+  const filteredEmployees = employees.filter(emp => {
+    // 1. Search Logic
+    const matchesSearch = (emp.employee_code || '').toLowerCase().includes(empSearch.toLowerCase()) || 
+                          (emp.full_name_eng || '').toLowerCase().includes(empSearch.toLowerCase());
+    
+    // 2. REQUIREMENT: Must have license plate
+    // We check if the employee code exists in our vehicle map
+    const hasLicensePlate = !!vehicles[emp.employee_code];
+
+    return matchesSearch && hasLicensePlate;
+  });
 
   // --- 4. ACTIONS ---
   const openBookingModal = (spot) => {
@@ -187,7 +194,7 @@ export default function Booking() {
     }
 
     try {
-      // Check for Spot Conflicts
+      // 1. Check for Spot Conflicts (Existing Logic)
       const { data: conflicts, error: conflictError } = await supabase
         .from('bookings')
         .select('id')
@@ -200,6 +207,24 @@ export default function Booking() {
 
       if (conflicts && conflicts.length > 0) {
         alert(`❌ Spot occupied during selected dates.`);
+        return;
+      }
+
+      // 2. REQUIREMENT: Check if Employee already has ANY booking in this interval
+      // 1 Employee can book only 1 lot_id in same interval day
+      const { data: userConflicts, error: userError } = await supabase
+        .from('bookings')
+        .select('id')
+        .eq('employee_id', bookingForm.employee_id)
+        .eq('is_deleted', false)
+        // Check for Date Overlap: (StartA <= EndB) and (EndA >= StartB)
+        .lte('booking_start', finalEndDate)
+        .gte('booking_end', bookingForm.start_date);
+
+      if (userError) throw userError;
+
+      if (userConflicts && userConflicts.length > 0) {
+        alert(`❌ This employee already has a booking for another spot during this period.`);
         return;
       }
 
@@ -426,7 +451,9 @@ export default function Booking() {
 
                 <div className="max-h-48 overflow-y-auto border border-gray-200 rounded-xl bg-white">
                     {filteredEmployees.length === 0 ? (
-                        <div className="p-3 text-sm text-gray-400 text-center">No employees found</div>
+                        <div className="p-3 text-sm text-gray-400 text-center">
+                            {empSearch ? 'No matching employees with license plates found' : 'No employees with license plates available'}
+                        </div>
                     ) : (
                         filteredEmployees.map(emp => {
                             const vehPlate = vehicles[emp.employee_code];

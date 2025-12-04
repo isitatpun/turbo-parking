@@ -1,29 +1,30 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
 import { Card, Modal, Badge } from '../components/UI';
-import { Plus, Edit2, Trash2, Car, Search, Building2, User } from 'lucide-react';
+import { Plus, Edit2, Trash2, Car, Search, Building2, User, X } from 'lucide-react';
 
 export default function Employees() {
   // --- Main Data State ---
-  const [records, setRecords] = useState([]); // Joined data (Vehicles + Central Info)
+  const [records, setRecords] = useState([]); // Grouped by Employee
   const [loading, setLoading] = useState(true);
-  const [mainFilter, setMainFilter] = useState(''); // Search bar for the main table
+  const [mainFilter, setMainFilter] = useState('');
 
   // --- Modal & Form State ---
   const [modalOpen, setModalOpen] = useState(false);
   const [searchCentralTerm, setSearchCentralTerm] = useState('');
   const [centralResults, setCentralResults] = useState([]);
   const [isSearchingCentral, setIsSearchingCentral] = useState(false);
+   
+  const [selectedEmployee, setSelectedEmployee] = useState(null); 
   
-  const [selectedEmployee, setSelectedEmployee] = useState(null); // The employee selected from search
-  const [licensePlate, setLicensePlate] = useState('');
-  const [editingId, setEditingId] = useState(null); // ID of the employee_vehicles row being edited
+  // Changed: Array for multiple plates (Max 5)
+  const [inputPlates, setInputPlates] = useState(['']); 
 
   useEffect(() => {
     fetchData();
   }, []);
 
-  // --- 1. FETCH & JOIN DATA ---
+  // --- 1. FETCH & JOIN DATA (GROUPED) ---
   const fetchData = async () => {
     try {
       setLoading(true);
@@ -42,7 +43,7 @@ export default function Employees() {
         return;
       }
 
-      // B. Extract unique Employee Codes to fetch details
+      // B. Extract unique Employee Codes
       const employeeCodes = [...new Set(vehicleData.map(v => v.employee_code))];
 
       // C. Fetch details from Central Table
@@ -53,23 +54,31 @@ export default function Employees() {
 
       if (centralError) throw centralError;
 
-      // D. Join Data in Memory
-      const joinedData = vehicleData.map(vehicle => {
-        const empDetails = centralData.find(c => c.employee_code === vehicle.employee_code);
-        return {
-          id: vehicle.id, // employee_vehicles ID
-          license_plate: vehicle.license_plate,
-          employee_code: vehicle.employee_code,
-          // Fallbacks if central data is missing
-          full_name_eng: empDetails?.full_name_eng || 'Unknown',
-          division_name: empDetails?.division_name || '-',
-          department_name: empDetails?.department_name || '-',
-          pos_level: empDetails?.pos_level || '-',
-          derived_type: mapPosLevelToType(empDetails?.pos_level)
-        };
+      // D. Group Vehicles by Employee Code (1 Employee = 1 Row)
+      const groupedMap = new Map();
+
+      vehicleData.forEach(vehicle => {
+        if (!groupedMap.has(vehicle.employee_code)) {
+            // Find employee details once
+            const empDetails = centralData.find(c => c.employee_code === vehicle.employee_code);
+            groupedMap.set(vehicle.employee_code, {
+                employee_code: vehicle.employee_code,
+                full_name_eng: empDetails?.full_name_eng || 'Unknown',
+                division_name: empDetails?.division_name || '-',
+                department_name: empDetails?.department_name || '-',
+                pos_level: empDetails?.pos_level || '-',
+                vehicles: [] // Array to hold multiple plates
+            });
+        }
+        // Push vehicle info into the array
+        groupedMap.get(vehicle.employee_code).vehicles.push({
+            id: vehicle.id,
+            license_plate: vehicle.license_plate
+        });
       });
 
-      setRecords(joinedData);
+      // Convert Map to Array
+      setRecords(Array.from(groupedMap.values()));
 
     } catch (error) {
       console.error("Error fetching data:", error);
@@ -79,26 +88,13 @@ export default function Employees() {
     }
   };
 
-  // --- HELPER: Position Level to Type Mapping ---
-  // Adjust this logic based on your actual business rules for "Management" vs "General"
-  const mapPosLevelToType = (posLevel) => {
-    if (!posLevel) return 'General';
-    const upperPos = posLevel.toUpperCase();
-    // Example Logic: specific keywords imply Management
-    if (['AVP', 'VP', 'SVP', 'EVP', 'C-LEVEL', 'DIRECTOR', 'MANAGER'].some(role => upperPos.includes(role))) {
-      return 'Management';
-    }
-    return 'General';
-  };
-
-  // --- 2. SEARCH CENTRAL DATABASE (For Modal) ---
+  // --- 2. SEARCH CENTRAL DATABASE ---
   const handleSearchCentral = async (term) => {
     setSearchCentralTerm(term);
-    if (term.length < 3) return; // Prevent searching on empty or short string
+    if (term.length < 3) return; 
 
     setIsSearchingCentral(true);
     try {
-      // Search by Code OR Name
       const { data, error } = await supabase
         .from('central_employee_from_databrick')
         .select('employee_code, full_name_eng, division_name, department_name, pos_level')
@@ -114,20 +110,37 @@ export default function Employees() {
     }
   };
 
-  // --- 3. CRUD ACTIONS ---
-  
+  // --- 3. INPUT HANDLERS (Multiple Plates) ---
+  const handleAddPlateInput = () => {
+    if (inputPlates.length < 5) {
+      setInputPlates([...inputPlates, '']);
+    }
+  };
+
+  const handleRemovePlateInput = (index) => {
+    const newPlates = [...inputPlates];
+    newPlates.splice(index, 1);
+    setInputPlates(newPlates);
+  };
+
+  const handlePlateChange = (index, value) => {
+    const newPlates = [...inputPlates];
+    // Remove spacebar immediately and uppercase
+    newPlates[index] = value.replace(/\s/g, '').toUpperCase();
+    setInputPlates(newPlates);
+  };
+
+  // --- 4. CRUD ACTIONS ---
   const handleOpenAdd = () => {
-    setEditingId(null);
     setSelectedEmployee(null);
     setSearchCentralTerm('');
     setCentralResults([]);
-    setLicensePlate('');
+    setInputPlates(['']); // Reset to 1 empty input
     setModalOpen(true);
   };
 
+  // Opens modal to Add more plates to existing employee
   const handleOpenEdit = (record) => {
-    setEditingId(record.id);
-    // Pre-fill data structure as if selected from search
     setSelectedEmployee({
       employee_code: record.employee_code,
       full_name_eng: record.full_name_eng,
@@ -135,39 +148,37 @@ export default function Employees() {
       department_name: record.department_name,
       pos_level: record.pos_level
     });
-    setLicensePlate(record.license_plate);
-    setSearchCentralTerm(''); // Reset search
-    setCentralResults([]);
+    setInputPlates(['']); // Start with a blank line to add new
     setModalOpen(true);
   };
 
   const handleSave = async () => {
-    if (!selectedEmployee || !licensePlate) {
-      alert("Please select an employee and enter a license plate.");
+    if (!selectedEmployee) {
+      alert("Please select an employee.");
+      return;
+    }
+
+    // Filter out empty inputs
+    const validPlates = inputPlates.filter(p => p.trim().length > 0);
+
+    if (validPlates.length === 0) {
+      alert("Please enter at least one license plate.");
       return;
     }
 
     try {
-      const payload = {
+      // Create an array of rows to insert (Supabase requires 1 row per vehicle)
+      const payload = validPlates.map(plate => ({
         employee_code: selectedEmployee.employee_code,
-        license_plate: licensePlate.toUpperCase(),
+        license_plate: plate,
         is_active: true
-      };
+      }));
 
-      if (editingId) {
-        // UPDATE existing vehicle entry
-        const { error } = await supabase
-          .from('employee_vehicles')
-          .update({ license_plate: payload.license_plate }) // usually only plate changes
-          .eq('id', editingId);
-        if (error) throw error;
-      } else {
-        // INSERT new vehicle entry
-        const { error } = await supabase
-          .from('employee_vehicles')
-          .insert([payload]);
-        if (error) throw error;
-      }
+      const { error } = await supabase
+        .from('employee_vehicles')
+        .insert(payload);
+
+      if (error) throw error;
 
       setModalOpen(false);
       fetchData();
@@ -176,13 +187,14 @@ export default function Employees() {
     }
   };
 
-  const handleDelete = async (id) => {
-    if (!confirm("Are you sure you want to remove this license plate entry?")) return;
+  // Individual delete of a specific vehicle ID
+  const handleDeleteVehicle = async (vehicleId) => {
+    if (!confirm("Remove this license plate?")) return;
     try {
       const { error } = await supabase
         .from('employee_vehicles')
         .update({ is_active: false })
-        .eq('id', id);
+        .eq('id', vehicleId);
 
       if (error) throw error;
       fetchData();
@@ -191,14 +203,16 @@ export default function Employees() {
     }
   };
 
-  // --- 4. FILTERING MAIN TABLE ---
+  // --- 5. FILTERING MAIN TABLE ---
   const filteredRecords = records.filter(r => {
     const term = mainFilter.toLowerCase();
+    const platesString = r.vehicles.map(v => v.license_plate).join(' ').toLowerCase();
+    
     return (
       r.full_name_eng?.toLowerCase().includes(term) ||
       r.employee_code?.toLowerCase().includes(term) ||
       r.division_name?.toLowerCase().includes(term) ||
-      r.department_name?.toLowerCase().includes(term)
+      platesString.includes(term)
     );
   });
 
@@ -223,7 +237,7 @@ export default function Employees() {
         <Search className="absolute left-3 top-2.5 text-gray-400" size={20} />
         <input 
           type="text" 
-          placeholder="Filter by Name, Code, Division or Department..." 
+          placeholder="Filter by Name, Code, Division or Plate Number..." 
           className="w-full pl-10 pr-4 py-2 border rounded-xl focus:ring-2 focus:ring-[#002D72] outline-none"
           value={mainFilter}
           onChange={(e) => setMainFilter(e.target.value)}
@@ -241,8 +255,9 @@ export default function Employees() {
                 <tr>
                   <th className="py-3 px-4">Employee</th>
                   <th className="py-3 px-4">Org Info</th>
-                  <th className="py-3 px-4">Type (Pos)</th>
-                  <th className="py-3 px-4">License Plate</th>
+                  {/* Changed Header to Position Level */}
+                  <th className="py-3 px-4">Position Level</th>
+                  <th className="py-3 px-4">License Plate(s)</th>
                   <th className="py-3 px-4 text-right">Action</th>
                 </tr>
               </thead>
@@ -255,7 +270,7 @@ export default function Employees() {
                   </tr>
                 )}
                 {filteredRecords.map((rec) => (
-                  <tr key={rec.id} className="border-b hover:bg-gray-50 transition">
+                  <tr key={rec.employee_code} className="border-b hover:bg-gray-50 transition align-top">
                     {/* Employee Column */}
                     <td className="py-3 px-4">
                       <div className="font-bold text-[#002D72]">{rec.full_name_eng}</div>
@@ -272,34 +287,36 @@ export default function Employees() {
                       <div className="text-gray-400 pl-5 text-xs">{rec.department_name}</div>
                     </td>
 
-                    {/* Type Column */}
+                    {/* Position Level Column - Simplified */}
                     <td className="py-3 px-4">
-                      <div className="flex flex-col items-start gap-1">
-                        <Badge color={rec.derived_type === 'Management' ? 'purple' : 'blue'}>
-                          {rec.derived_type}
-                        </Badge>
-                        <span className="text-[10px] text-gray-400 uppercase tracking-wider">{rec.pos_level}</span>
-                      </div>
+                       <span className="text-sm font-medium text-gray-700">{rec.pos_level}</span>
                     </td>
 
-                    {/* Plate Column */}
+                    {/* Plate Column - Minimal Apple Style - Multiple Items */}
                     <td className="py-3 px-4">
-                      <div className="bg-white border-2 border-gray-800 text-gray-900 font-bold px-3 py-1 rounded-md inline-flex items-center gap-2 shadow-sm">
-                        <Car size={16} className="text-gray-400" />
-                        {rec.license_plate}
+                      <div className="flex flex-wrap gap-2">
+                        {rec.vehicles.map((v) => (
+                           <div key={v.id} className="group relative bg-white border border-gray-200 text-gray-800 text-sm font-semibold px-3 py-1 rounded-full shadow-sm flex items-center gap-2 hover:border-[#FA4786] transition-colors cursor-default">
+                              <span className="text-xs text-gray-400">TH</span>
+                              {v.license_plate}
+                              {/* Quick Delete X on hover */}
+                              <button 
+                                onClick={() => handleDeleteVehicle(v.id)}
+                                className="ml-1 text-gray-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"
+                              >
+                                <X size={14} />
+                              </button>
+                           </div>
+                        ))}
                       </div>
                     </td>
 
                     {/* Action Column */}
                     <td className="py-3 px-4 text-right">
-                      <div className="flex justify-end gap-2">
-                        <button onClick={() => handleOpenEdit(rec)} className="text-blue-600 hover:bg-blue-50 p-2 rounded-lg transition">
+                       {/* Opens modal pre-filled to add MORE plates */}
+                       <button onClick={() => handleOpenEdit(rec)} className="text-blue-600 hover:bg-blue-50 p-2 rounded-lg transition" title="Add another plate">
                           <Edit2 size={16}/>
-                        </button>
-                        <button onClick={() => handleDelete(rec.id)} className="text-red-500 hover:bg-red-50 p-2 rounded-lg transition">
-                          <Trash2 size={16}/>
-                        </button>
-                      </div>
+                       </button>
                     </td>
                   </tr>
                 ))}
@@ -309,31 +326,30 @@ export default function Employees() {
         )}
       </Card>
 
-      {/* MODAL: ADD / EDIT */}
+      {/* MODAL: ADD PLATES */}
       <Modal 
         isOpen={modalOpen} 
         onClose={() => setModalOpen(false)} 
-        title={editingId ? "Edit Vehicle Info" : "Add License Plate"}
+        title="Register Vehicles"
         onSave={handleSave}
-        saveLabel="Save Record"
+        saveLabel="Save Records"
       >
         <div className="space-y-6">
           
-          {/* 1. EMPLOYEE SELECTION (Search or Display) */}
+          {/* 1. EMPLOYEE SELECTION */}
           <div className="bg-gray-50 p-4 rounded-xl border border-gray-200">
             <label className="block text-sm font-bold text-[#002D72] mb-2 flex items-center gap-2">
               <User size={16}/> Employee Selection
             </label>
             
-            {/* If Edit Mode or Employee Selected, Show Card */}
             {selectedEmployee ? (
               <div className="bg-white p-3 rounded-lg border shadow-sm flex justify-between items-center">
                 <div>
                   <div className="font-bold text-gray-800">{selectedEmployee.full_name_eng}</div>
                   <div className="text-xs text-gray-500 font-mono">{selectedEmployee.employee_code} | {selectedEmployee.division_name}</div>
-                  <div className="text-xs text-blue-600 font-medium mt-1">Level: {selectedEmployee.pos_level}</div>
                 </div>
-                {!editingId && (
+                {/* Allow changing employee only if creating fresh, not editing existing row */}
+                {inputPlates.length === 1 && records.every(r => r.employee_code !== selectedEmployee.employee_code) && (
                    <button 
                      onClick={() => setSelectedEmployee(null)} 
                      className="text-xs text-red-500 hover:underline"
@@ -343,7 +359,6 @@ export default function Employees() {
                 )}
               </div>
             ) : (
-              /* Search Input */
               <div className="relative">
                 <input 
                   type="text"
@@ -354,7 +369,6 @@ export default function Employees() {
                 />
                 <Search className="absolute left-3 top-2.5 text-gray-400" size={16} />
                 
-                {/* Search Results Dropdown */}
                 {centralResults.length > 0 && (
                    <div className="absolute z-10 w-full bg-white border mt-1 rounded-lg shadow-xl max-h-60 overflow-y-auto">
                      {centralResults.map((res) => (
@@ -364,7 +378,7 @@ export default function Employees() {
                            setSelectedEmployee(res);
                            setCentralResults([]);
                            setSearchCentralTerm('');
-                         }}
+                         }} 
                          className="p-3 hover:bg-gray-50 cursor-pointer border-b last:border-0"
                        >
                          <div className="font-medium text-sm text-[#002D72]">{res.full_name_eng}</div>
@@ -381,21 +395,46 @@ export default function Employees() {
             )}
           </div>
 
-          {/* 2. LICENSE PLATE INPUT */}
+          {/* 2. LICENSE PLATE INPUTS (Dynamic List) */}
           <div>
-            <label className="block text-sm font-bold text-[#002D72] mb-2 flex items-center gap-2">
-              <Car size={16}/> License Plate
+            <label className="block text-sm font-bold text-[#002D72] mb-2 flex items-center justify-between">
+              <span className="flex items-center gap-2"><Car size={16}/> License Plate(s)</span>
+              <span className="text-xs font-normal text-gray-400">Max 5 per submission</span>
             </label>
-            <input 
-              type="text"
-              placeholder="e.g. 1AB-1234"
-              className="w-full border-2 border-gray-200 rounded-xl p-3 text-lg font-bold text-gray-700 focus:border-[#FA4786] outline-none uppercase"
-              value={licensePlate}
-              onChange={(e) => setLicensePlate(e.target.value)}
-            />
-            <p className="text-xs text-gray-400 mt-1">
-              Enter the vehicle registration number.
-            </p>
+            
+            <div className="space-y-3">
+                {inputPlates.map((plate, index) => (
+                    <div key={index} className="flex gap-2">
+                        <input 
+                          type="text"
+                          placeholder="e.g. 1ฏฏ1234"
+                          className="flex-1 border-2 border-gray-200 rounded-xl p-3 text-lg font-bold text-gray-700 focus:border-[#FA4786] outline-none uppercase tracking-widest placeholder:tracking-normal placeholder:font-normal"
+                          value={plate}
+                          onChange={(e) => handlePlateChange(index, e.target.value)}
+                        />
+                        {inputPlates.length > 1 && (
+                            <button 
+                                onClick={() => handleRemovePlateInput(index)}
+                                className="p-3 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-xl transition"
+                            >
+                                <Trash2 size={20} />
+                            </button>
+                        )}
+                    </div>
+                ))}
+            </div>
+
+            {inputPlates.length < 5 && (
+                <button 
+                    onClick={handleAddPlateInput}
+                    className="mt-3 text-sm text-[#FA4786] font-medium flex items-center gap-1 hover:underline"
+                >
+                    <Plus size={16} /> Add another plate
+                </button>
+            )}
+             <p className="text-xs text-gray-400 mt-2">
+               Spacebars are automatically removed. Format is auto-adjusted.
+             </p>
           </div>
 
         </div>
