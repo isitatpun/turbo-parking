@@ -64,6 +64,11 @@ export default function Home() {
     try {
       setLoading(true);
 
+      // 1. Fetch Bookings 
+      // 2. Fetch Spots 
+      // 3. Fetch Bond Holders
+      // 4. Fetch Vehicles 
+      // 5. Fetch Privileges (CORRECTED TABLE NAME)
       const [bookingsRes, spotsRes, bondRes, vehiclesRes, privRes] = await Promise.all([
         supabase.from('bookings')
           .select(`
@@ -76,7 +81,9 @@ export default function Home() {
         supabase.from('parking_spots').select('*'),
         supabase.from('bond_holders').select('employee_code, tier'),
         supabase.from('employee_vehicles').select('employee_code, license_plate').eq('is_active', true),
-        supabase.from('employee_priviledges').select('*') 
+        
+        // --- FIXED: Corrected table name to 'employee_privileges' ---
+        supabase.from('employee_privileges').select('*') 
       ]);
 
       if (bookingsRes.error) throw bookingsRes.error;
@@ -140,6 +147,9 @@ export default function Home() {
 
         // 1. Find Data Sources
         const holder = bondHolders?.find(b => b.employee_code === empCode);
+        
+        // Check for 'Free Parking' in privileges
+        // Note: Checking both 'privilege' (likely) and 'priviledge' (just in case)
         const priv = privileges?.find(p => 
             p.employee_code === empCode && 
             (p.privilege === 'Free Parking' || p.priviledge === 'Free Parking')
@@ -154,12 +164,10 @@ export default function Home() {
         } else if (holder && (holder.tier === 1 || holder.tier === 2)) {
             isFree = true;
         } else if (priv) {
-            // "if can find privileges ... = Free Parking then treat like same logic with management"
             isFree = true;
         }
 
         // 3. Determine Display Text (Priority: BondHolder > Privilege)
-        // "If find 2 value make bondholder to main data"
         let displayText = '-';
 
         if (holder) {
