@@ -232,9 +232,14 @@ export default function BondHolder() {
                                 <tr key={row.id} className="border-b hover:bg-gray-50">
                                     <td className="py-3 px-4 font-bold text-[#002D72]">{row.id}</td>
                                     <td className="py-3 px-4">{row.full_name}</td>
-                                    <td className="py-3 px-4 font-mono bg-blue-50 text-blue-600 rounded px-2 w-fit">
-                                        {row.employee_code}
+                                    
+                                    {/* --- FIX IS HERE --- */}
+                                    <td className="py-3 px-4">
+                                        <span className="font-mono bg-blue-50 text-blue-600 rounded px-2 py-1 inline-block">
+                                            {row.employee_code}
+                                        </span>
                                     </td>
+                                    
                                     <td className="py-3 px-4">
                                         <Badge color={row.tier === 0 ? 'pink' : 'blue'}>Tier {row.tier}</Badge>
                                     </td>

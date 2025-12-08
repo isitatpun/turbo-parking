@@ -1,11 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
 import { Card, Modal } from '../components/UI';
-import { Plus, Edit2, Trash2, Car, Search, Building2, User, X } from 'lucide-react';
+import { Plus, Edit2, Trash2, Car, Search, Building2, User, X, Star } from 'lucide-react'; // Added Star icon
 
 export default function Employees() {
   // --- Main Data State ---
-  const [records, setRecords] = useState([]); // Grouped by Employee
+  const [records, setRecords] = useState([]); 
   const [loading, setLoading] = useState(true);
   const [mainFilter, setMainFilter] = useState('');
 
@@ -17,14 +17,17 @@ export default function Employees() {
     
   const [selectedEmployee, setSelectedEmployee] = useState(null); 
   
-  // Changed: Array for multiple plates (Max 5)
+  // New State for Privilege
+  const [privilegeInput, setPrivilegeInput] = useState(''); // <--- NEW
+
+  // Array for multiple plates (Max 5)
   const [inputPlates, setInputPlates] = useState(['']); 
 
   useEffect(() => {
     fetchData();
   }, []);
 
-  // --- 1. FETCH & JOIN DATA (GROUPED) ---
+  // --- 1. FETCH & JOIN DATA ---
   const fetchData = async () => {
     try {
       setLoading(true);
@@ -37,14 +40,9 @@ export default function Employees() {
         .order('created_at', { ascending: false });
 
       if (vehicleError) throw vehicleError;
-      if (!vehicleData || vehicleData.length === 0) {
-        setRecords([]);
-        setLoading(false);
-        return;
-      }
 
       // B. Extract unique Employee Codes
-      const employeeCodes = [...new Set(vehicleData.map(v => v.employee_code))];
+      const employeeCodes = vehicleData ? [...new Set(vehicleData.map(v => v.employee_code))] : [];
 
       // C. Fetch details from Central Table
       const { data: centralData, error: centralError } = await supabase
@@ -54,30 +52,44 @@ export default function Employees() {
 
       if (centralError) throw centralError;
 
-      // D. Group Vehicles by Employee Code (1 Employee = 1 Row)
+      // D. Fetch Privileges (NEW STEP) <--- NEW
+      const { data: privData, error: privError } = await supabase
+        .from('employee_privileges')
+        .select('employee_code, privilege')
+        .in('employee_code', employeeCodes);
+
+      if (privError) throw privError;
+
+      // E. Group Vehicles by Employee Code
       const groupedMap = new Map();
 
-      vehicleData.forEach(vehicle => {
-        if (!groupedMap.has(vehicle.employee_code)) {
-            // Find employee details once
-            const empDetails = centralData.find(c => c.employee_code === vehicle.employee_code);
-            groupedMap.set(vehicle.employee_code, {
-                employee_code: vehicle.employee_code,
-                full_name_eng: empDetails?.full_name_eng || 'Unknown',
-                division_name: empDetails?.division_name || '-',
-                department_name: empDetails?.department_name || '-',
-                pos_level: empDetails?.pos_level || '-',
-                vehicles: [] // Array to hold multiple plates
-            });
-        }
-        // Push vehicle info into the array
-        groupedMap.get(vehicle.employee_code).vehicles.push({
-            id: vehicle.id,
-            license_plate: vehicle.license_plate
-        });
-      });
+      // Helper function to get privilege safely
+      const getPrivilege = (code) => {
+        const found = privData?.find(p => p.employee_code === code);
+        return found ? found.privilege : '';
+      };
 
-      // Convert Map to Array
+      if(vehicleData && vehicleData.length > 0) {
+        vehicleData.forEach(vehicle => {
+            if (!groupedMap.has(vehicle.employee_code)) {
+                const empDetails = centralData?.find(c => c.employee_code === vehicle.employee_code);
+                groupedMap.set(vehicle.employee_code, {
+                    employee_code: vehicle.employee_code,
+                    full_name_eng: empDetails?.full_name_eng || 'Unknown',
+                    division_name: empDetails?.division_name || '-',
+                    department_name: empDetails?.department_name || '-',
+                    pos_level: empDetails?.pos_level || '-',
+                    privilege: getPrivilege(vehicle.employee_code), // <--- NEW: Add privilege to record
+                    vehicles: [] 
+                });
+            }
+            groupedMap.get(vehicle.employee_code).vehicles.push({
+                id: vehicle.id,
+                license_plate: vehicle.license_plate
+            });
+          });
+      }
+
       setRecords(Array.from(groupedMap.values()));
 
     } catch (error) {
@@ -110,11 +122,9 @@ export default function Employees() {
     }
   };
 
-  // --- 3. INPUT HANDLERS (Multiple Plates) ---
+  // --- 3. INPUT HANDLERS ---
   const handleAddPlateInput = () => {
-    if (inputPlates.length < 5) {
-      setInputPlates([...inputPlates, '']);
-    }
+    if (inputPlates.length < 5) setInputPlates([...inputPlates, '']);
   };
 
   const handleRemovePlateInput = (index) => {
@@ -125,7 +135,6 @@ export default function Employees() {
 
   const handlePlateChange = (index, value) => {
     const newPlates = [...inputPlates];
-    // Remove spacebar immediately and uppercase
     newPlates[index] = value.replace(/\s/g, '').toUpperCase();
     setInputPlates(newPlates);
   };
@@ -135,12 +144,12 @@ export default function Employees() {
     setSelectedEmployee(null);
     setSearchCentralTerm('');
     setCentralResults([]);
-    setInputPlates(['']); // Reset to 1 empty input
+    setInputPlates(['']); 
+    setPrivilegeInput(''); // Reset privilege <--- NEW
     setModalOpen(true);
   };
 
-  // Opens modal to Add more plates to existing employee
-  const handleOpenEdit = (record) => {
+  const handleOpenEdit = async (record) => {
     setSelectedEmployee({
       employee_code: record.employee_code,
       full_name_eng: record.full_name_eng,
@@ -148,7 +157,12 @@ export default function Employees() {
       department_name: record.department_name,
       pos_level: record.pos_level
     });
-    setInputPlates(['']); // Start with a blank line to add new
+    
+    // Check if there is an existing privilege for this user to pre-fill
+    // We can use the data from the table record we just clicked
+    setPrivilegeInput(record.privilege || ''); // <--- NEW
+
+    setInputPlates(['']); 
     setModalOpen(true);
   };
 
@@ -158,36 +172,49 @@ export default function Employees() {
       return;
     }
 
-    // Filter out empty inputs
     const validPlates = inputPlates.filter(p => p.trim().length > 0);
 
-    if (validPlates.length === 0) {
-      alert("Please enter at least one license plate.");
+    // Allow saving if either plates exist OR privilege is being updated
+    if (validPlates.length === 0 && privilegeInput.trim() === '') {
+      alert("Please enter a license plate or a privilege note.");
       return;
     }
 
     try {
-      // Create an array of rows to insert (Supabase requires 1 row per vehicle)
-      const payload = validPlates.map(plate => ({
-        employee_code: selectedEmployee.employee_code,
-        license_plate: plate,
-        is_active: true
-      }));
+      // 1. Save Privilege (Upsert: Insert or Update) <--- NEW
+      if (privilegeInput !== undefined) {
+          const { error: privError } = await supabase
+            .from('employee_privileges')
+            .upsert({ 
+                employee_code: selectedEmployee.employee_code, 
+                privilege: privilegeInput,
+                updated_at: new Date()
+            });
+          if (privError) throw privError;
+      }
 
-      const { error } = await supabase
-        .from('employee_vehicles')
-        .insert(payload);
+      // 2. Save Vehicles (if any)
+      if (validPlates.length > 0) {
+          const payload = validPlates.map(plate => ({
+            employee_code: selectedEmployee.employee_code,
+            license_plate: plate,
+            is_active: true
+          }));
 
-      if (error) throw error;
+          const { error: vehicleError } = await supabase
+            .from('employee_vehicles')
+            .insert(payload);
+
+          if (vehicleError) throw vehicleError;
+      }
 
       setModalOpen(false);
-      fetchData();
+      fetchData(); // Refresh table
     } catch (error) {
       alert("Error saving: " + error.message);
     }
   };
 
-  // Individual delete of a specific vehicle ID
   const handleDeleteVehicle = async (vehicleId) => {
     if (!confirm("Remove this license plate?")) return;
     try {
@@ -203,7 +230,7 @@ export default function Employees() {
     }
   };
 
-  // --- 5. FILTERING MAIN TABLE ---
+  // --- 5. FILTERING ---
   const filteredRecords = records.filter(r => {
     const term = mainFilter.toLowerCase();
     const platesString = r.vehicles.map(v => v.license_plate).join(' ').toLowerCase();
@@ -212,6 +239,7 @@ export default function Employees() {
       r.full_name_eng?.toLowerCase().includes(term) ||
       r.employee_code?.toLowerCase().includes(term) ||
       r.division_name?.toLowerCase().includes(term) ||
+      r.privilege?.toLowerCase().includes(term) || // <--- NEW: Search by privilege
       platesString.includes(term)
     );
   });
@@ -228,7 +256,7 @@ export default function Employees() {
           onClick={handleOpenAdd} 
           className="bg-[#FA4786] text-white px-4 py-2 rounded-xl flex items-center gap-2 hover:bg-pink-600 shadow-lg transition"
         >
-          <Plus size={18} /> Add License Plate
+          <Plus size={18} /> Add Record
         </button>
       </div>
 
@@ -237,7 +265,7 @@ export default function Employees() {
         <Search className="absolute left-3 top-2.5 text-gray-400" size={20} />
         <input 
           type="text" 
-          placeholder="Filter by Name, Code, Division or Plate Number..." 
+          placeholder="Filter by Name, Code, Division, Plate or Privilege..." 
           className="w-full pl-10 pr-4 py-2 border rounded-xl focus:ring-2 focus:ring-[#002D72] outline-none"
           value={mainFilter}
           onChange={(e) => setMainFilter(e.target.value)}
@@ -255,7 +283,7 @@ export default function Employees() {
                 <tr>
                   <th className="py-3 px-4 text-center rounded-tl-lg">Employee</th>
                   <th className="py-3 px-4 text-center">Org Info</th>
-                  <th className="py-3 px-4 text-center">Position Level</th>
+                  <th className="py-3 px-4 text-center">Privilege</th> {/* <--- NEW Column */}
                   <th className="py-3 px-4 text-center">License Plate(s)</th>
                   <th className="py-3 px-4 text-center rounded-tr-lg">Action</th>
                 </tr>
@@ -270,7 +298,7 @@ export default function Employees() {
                 )}
                 {filteredRecords.map((rec) => (
                   <tr key={rec.employee_code} className="hover:bg-gray-50 transition align-top">
-                    {/* Employee Column */}
+                    {/* Employee */}
                     <td className="py-3 px-4">
                       <div className="font-bold text-[#002D72]">{rec.full_name_eng}</div>
                       <div className="text-xs font-mono text-gray-500 bg-gray-100 inline-block px-1 rounded">
@@ -278,7 +306,7 @@ export default function Employees() {
                       </div>
                     </td>
 
-                    {/* Org Column */}
+                    {/* Org Info */}
                     <td className="py-3 px-4 text-sm text-gray-600">
                       <div className="flex items-center gap-1">
                         <Building2 size={14} /> {rec.division_name}
@@ -286,19 +314,24 @@ export default function Employees() {
                       <div className="text-gray-400 pl-5 text-xs">{rec.department_name}</div>
                     </td>
 
-                    {/* Position Level Column */}
+                    {/* Privilege Column (NEW) */}
                     <td className="py-3 px-4 text-center">
-                        <span className="text-sm font-medium text-gray-700 bg-gray-100 px-2 py-1 rounded-full">{rec.pos_level}</span>
+                        {rec.privilege ? (
+                            <span className="text-xs font-bold text-orange-600 bg-orange-50 border border-orange-100 px-2 py-1 rounded-lg">
+                                {rec.privilege}
+                            </span>
+                        ) : (
+                            <span className="text-gray-300 text-xs">-</span>
+                        )}
                     </td>
 
-                    {/* Plate Column - Updated to Car Icon */}
+                    {/* Plates */}
                     <td className="py-3 px-4">
                       <div className="flex flex-wrap gap-2 justify-start">
                         {rec.vehicles.map((v) => (
                            <div key={v.id} className="group relative bg-white border border-gray-200 text-gray-800 text-sm font-semibold px-3 py-1 rounded-full shadow-sm flex items-center gap-2 hover:border-[#FA4786] transition-colors cursor-default">
                               <Car size={16} className="text-[#FA4786]" />
                               {v.license_plate}
-                              {/* Quick Delete X on hover */}
                               <button 
                                 onClick={() => handleDeleteVehicle(v.id)}
                                 className="ml-1 text-gray-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"
@@ -310,10 +343,9 @@ export default function Employees() {
                       </div>
                     </td>
 
-                    {/* Action Column */}
+                    {/* Action */}
                     <td className="py-3 px-4 text-center">
-                        {/* Opens modal pre-filled to add MORE plates */}
-                        <button onClick={() => handleOpenEdit(rec)} className="text-blue-600 hover:bg-blue-50 p-2 rounded-lg transition" title="Add another plate">
+                        <button onClick={() => handleOpenEdit(rec)} className="text-blue-600 hover:bg-blue-50 p-2 rounded-lg transition" title="Edit / Add Plate">
                           <Edit2 size={16}/>
                         </button>
                     </td>
@@ -325,11 +357,11 @@ export default function Employees() {
         )}
       </Card>
 
-      {/* MODAL: ADD PLATES */}
+      {/* MODAL */}
       <Modal 
         isOpen={modalOpen} 
         onClose={() => setModalOpen(false)} 
-        title="Register Vehicles"
+        title="Manage Vehicle & Privilege"
         onSave={handleSave}
         saveLabel="Save Records"
       >
@@ -347,8 +379,8 @@ export default function Employees() {
                   <div className="font-bold text-gray-800">{selectedEmployee.full_name_eng}</div>
                   <div className="text-xs text-gray-500 font-mono">{selectedEmployee.employee_code} | {selectedEmployee.division_name}</div>
                 </div>
-                {/* Allow changing employee only if creating fresh, not editing existing row */}
-                {inputPlates.length === 1 && records.every(r => r.employee_code !== selectedEmployee.employee_code) && (
+                {/* Only show Change button if this is a NEW entry */}
+                {records.every(r => r.employee_code !== selectedEmployee.employee_code) && (
                    <button 
                      onClick={() => setSelectedEmployee(null)} 
                      className="text-xs text-red-500 hover:underline"
@@ -377,6 +409,10 @@ export default function Employees() {
                            setSelectedEmployee(res);
                            setCentralResults([]);
                            setSearchCentralTerm('');
+                           // Check if this user already has a privilege loaded in main table
+                           const existing = records.find(r => r.employee_code === res.employee_code);
+                           if(existing) setPrivilegeInput(existing.privilege || '');
+                           else setPrivilegeInput('');
                          }} 
                          className="p-3 hover:bg-gray-50 cursor-pointer border-b last:border-0"
                        >
@@ -394,7 +430,21 @@ export default function Employees() {
             )}
           </div>
 
-          {/* 2. LICENSE PLATE INPUTS (Dynamic List) */}
+          {/* 2. PRIVILEGE INPUT (NEW SECTION) */}
+          <div>
+             <label className="flex items-center gap-2 text-sm font-bold text-[#002D72] mb-2">
+               <Star size={16}/> Privilege / Note
+             </label>
+             <input 
+               type="text"
+               placeholder="e.g. VIP, Night Shift, Reserved Parking"
+               className="w-full border rounded-xl p-3 text-gray-700 focus:ring-2 focus:ring-[#FA4786] outline-none"
+               value={privilegeInput}
+               onChange={(e) => setPrivilegeInput(e.target.value)}
+             />
+          </div>
+
+          {/* 3. LICENSE PLATE INPUTS */}
           <div>
             <label className="flex items-center justify-between text-sm font-bold text-[#002D72] mb-2">
               <span className="flex items-center gap-2"><Car size={16}/> License Plate(s)</span>
@@ -406,8 +456,8 @@ export default function Employees() {
                     <div key={index} className="flex gap-2">
                         <input 
                           type="text"
-                          placeholder="e.g. 1ฏฏ1234"
-                          className="flex-1 border-2 border-gray-200 rounded-xl p-3 text-lg font-bold text-gray-700 focus:border-[#FA4786] outline-none uppercase tracking-widest placeholder:tracking-normal placeholder:font-normal"
+                          placeholder="e.g. 1กก1234"
+                          className="flex-1 border-2 border-gray-200 rounded-xl p-3 text-lg font-bold text-gray-700 focus:border-[#FA4786] outline-none uppercase tracking-widest"
                           value={plate}
                           onChange={(e) => handlePlateChange(index, e.target.value)}
                         />
@@ -431,9 +481,6 @@ export default function Employees() {
                     <Plus size={16} /> Add another plate
                 </button>
             )}
-             <p className="text-xs text-gray-400 mt-2">
-               Spacebars are automatically removed. Format is auto-adjusted.
-             </p>
           </div>
 
         </div>

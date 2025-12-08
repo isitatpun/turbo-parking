@@ -64,11 +64,12 @@ export default function Home() {
     try {
       setLoading(true);
 
-      // 1. Fetch Bookings with linked Central Employee data
-      // 2. Fetch Spots (We fetch ALL, then filter in JS based on dates)
+      // 1. Fetch Bookings 
+      // 2. Fetch Spots 
       // 3. Fetch Bond Holders
-      // 4. Fetch Vehicles (for license plates)
-      const [bookingsRes, spotsRes, bondRes, vehiclesRes] = await Promise.all([
+      // 4. Fetch Vehicles 
+      // 5. NEW: Fetch Employee Privileges
+      const [bookingsRes, spotsRes, bondRes, vehiclesRes, privRes] = await Promise.all([
         supabase.from('bookings')
           .select(`
             *, 
@@ -79,17 +80,21 @@ export default function Home() {
         
         supabase.from('parking_spots').select('*'),
         supabase.from('bond_holders').select('employee_code, tier'),
-        supabase.from('employee_vehicles').select('employee_code, license_plate').eq('is_active', true)
+        supabase.from('employee_vehicles').select('employee_code, license_plate').eq('is_active', true),
+        // NEW: Fetch privileges
+        supabase.from('employee_priviledges').select('*') 
       ]);
 
       if (bookingsRes.error) throw bookingsRes.error;
       if (vehiclesRes.error) throw vehiclesRes.error;
+      if (privRes.error) throw privRes.error;
 
       const processed = processMonthlyData(
         bookingsRes.data, 
         spotsRes.data, 
         bondRes.data,
-        vehiclesRes.data, // Pass vehicles map
+        vehiclesRes.data,
+        privRes.data, // Pass privileges data
         selectedYear, 
         selectedMonth
       );
@@ -125,7 +130,8 @@ export default function Home() {
   };
 
   // --- CORE LOGIC ENGINE ---
-  const processMonthlyData = (bookings, allSpots, bondHolders, vehicles, year, month) => {
+  // Added 'privileges' to arguments
+  const processMonthlyData = (bookings, allSpots, bondHolders, vehicles, privileges, year, month) => {
     const monthStart = new Date(year, month, 1);
     const monthEnd = new Date(year, month + 1, 0); 
     const daysInMonth = monthEnd.getDate();
@@ -136,15 +142,36 @@ export default function Home() {
         vehicleMap[v.employee_code] = v.license_plate;
     });
 
+    // --- UPDATED LOGIC FOR FREE PARKING ---
     const isFreeParking = (empCode, posLevel) => {
+        // 1. Management Level
         if (posLevel === 'Management') return true; 
         if (!empCode) return false;
+
+        // 2. NEW: Check Employee Privileges Table for "Free Parking"
+        const hasPrivilege = privileges?.find(p => 
+            p.employee_code === empCode && 
+            (p.privilege === 'Free Parking' || p.priviledge === 'Free Parking') // Handling potential column name typo
+        );
+        if (hasPrivilege) return true;
+
+        // 3. Bond Holders Tier 1 or 2
         const holder = bondHolders?.find(b => b.employee_code === empCode);
         return holder && (holder.tier === 1 || holder.tier === 2);
     };
 
+    // --- UPDATED LOGIC FOR DISPLAY TEXT ---
     const getPrivilegeText = (empCode) => {
         if (!empCode) return '-';
+
+        // 1. NEW: Check Free Parking Privilege first
+        const hasPrivilege = privileges?.find(p => 
+            p.employee_code === empCode && 
+            (p.privilege === 'Free Parking' || p.priviledge === 'Free Parking')
+        );
+        if (hasPrivilege) return 'Free Parking';
+
+        // 2. Check Bond Holder
         const holder = bondHolders?.find(b => b.employee_code === empCode);
         return holder ? `Bond Holder Tier ${holder.tier}` : '-';
     };
@@ -182,6 +209,7 @@ export default function Home() {
         
         const actualPlate = b.license_plate_used || vehicleMap[empCode] || '-';
         
+        // Use updated functions
         const isFree = isFreeParking(empCode, empPosLevel);
         const privilegeText = getPrivilegeText(empCode);
 
@@ -200,7 +228,7 @@ export default function Home() {
         if (bStart < monthStart && bEnd >= monthStart) {
             beg.count++;
             const fee = price; 
-            const net = isFree ? 0 : fee;
+            const net = isFree ? 0 : fee; // Logic applied here
             beg.total += fee;
             beg.net += net;
         }
@@ -210,7 +238,7 @@ export default function Home() {
             const diffTime = monthEnd.getTime() - bStart.getTime();
             const daysActive = Math.round(diffTime / (1000 * 60 * 60 * 24)) + 1;
             const fee = Math.floor(dailyRate * daysActive);
-            const net = isFree ? 0 : fee;
+            const net = isFree ? 0 : fee; // Logic applied here
 
             newB.total += fee;
             newB.net += net;
@@ -223,7 +251,7 @@ export default function Home() {
             const diffTime = monthEnd.getTime() - bEnd.getTime();
             const daysLost = Math.round(diffTime / (1000 * 60 * 60 * 24)); 
             const lostFee = Math.floor(dailyRate * daysLost) * -1;
-            const lostNet = isFree ? 0 : lostFee;
+            const lostNet = isFree ? 0 : lostFee; // Logic applied here
 
             exp.total += lostFee;
             exp.net += lostNet;
@@ -240,7 +268,7 @@ export default function Home() {
             const diffTime = effectiveEnd.getTime() - effectiveStart.getTime();
             const daysOccupied = Math.round(diffTime / (1000 * 60 * 60 * 24)) + 1;
             const totalFee = Math.floor(dailyRate * daysOccupied);
-            const netFee = isFree ? 0 : totalFee;
+            const netFee = isFree ? 0 : totalFee; // Logic applied here
 
             grandTotalRevenue += totalFee;
             grandNetRevenue += netFee;
@@ -253,7 +281,7 @@ export default function Home() {
                 display_total: totalFee,
                 display_net: netFee,
                 display_type: empPosLevel,
-                display_privilege: privilegeText
+                display_privilege: privilegeText // Display text applied here
             });
 
             if (bEnd >= reportCapDate && b.parking_spots?.spot_type === 'Reserved (Paid) Parking') {
