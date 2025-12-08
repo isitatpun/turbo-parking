@@ -64,11 +64,6 @@ export default function Home() {
     try {
       setLoading(true);
 
-      // 1. Fetch Bookings 
-      // 2. Fetch Spots 
-      // 3. Fetch Bond Holders
-      // 4. Fetch Vehicles 
-      // 5. NEW: Fetch Employee Privileges
       const [bookingsRes, spotsRes, bondRes, vehiclesRes, privRes] = await Promise.all([
         supabase.from('bookings')
           .select(`
@@ -81,7 +76,6 @@ export default function Home() {
         supabase.from('parking_spots').select('*'),
         supabase.from('bond_holders').select('employee_code, tier'),
         supabase.from('employee_vehicles').select('employee_code, license_plate').eq('is_active', true),
-        // NEW: Fetch privileges
         supabase.from('employee_priviledges').select('*') 
       ]);
 
@@ -94,7 +88,7 @@ export default function Home() {
         spotsRes.data, 
         bondRes.data,
         vehiclesRes.data,
-        privRes.data, // Pass privileges data
+        privRes.data,
         selectedYear, 
         selectedMonth
       );
@@ -130,50 +124,51 @@ export default function Home() {
   };
 
   // --- CORE LOGIC ENGINE ---
-  // Added 'privileges' to arguments
   const processMonthlyData = (bookings, allSpots, bondHolders, vehicles, privileges, year, month) => {
     const monthStart = new Date(year, month, 1);
     const monthEnd = new Date(year, month + 1, 0); 
     const daysInMonth = monthEnd.getDate();
 
-    // Create a vehicle lookup map: { employee_code: 'PLATE-123' }
     const vehicleMap = {};
     vehicles?.forEach(v => {
         vehicleMap[v.employee_code] = v.license_plate;
     });
 
-    // --- UPDATED LOGIC FOR FREE PARKING ---
-    const isFreeParking = (empCode, posLevel) => {
-        // 1. Management Level
-        if (posLevel === 'Management') return true; 
-        if (!empCode) return false;
+    // --- LOGIC HELPER ---
+    const getEmployeeStatus = (empCode, posLevel) => {
+        if (!empCode) return { isFree: false, displayText: '-' };
 
-        // 2. NEW: Check Employee Privileges Table for "Free Parking"
-        const hasPrivilege = privileges?.find(p => 
-            p.employee_code === empCode && 
-            (p.privilege === 'Free Parking' || p.priviledge === 'Free Parking') // Handling potential column name typo
-        );
-        if (hasPrivilege) return true;
-
-        // 3. Bond Holders Tier 1 or 2
+        // 1. Find Data Sources
         const holder = bondHolders?.find(b => b.employee_code === empCode);
-        return holder && (holder.tier === 1 || holder.tier === 2);
-    };
-
-    // --- UPDATED LOGIC FOR DISPLAY TEXT ---
-    const getPrivilegeText = (empCode) => {
-        if (!empCode) return '-';
-
-        // 1. NEW: Check Free Parking Privilege first
-        const hasPrivilege = privileges?.find(p => 
+        const priv = privileges?.find(p => 
             p.employee_code === empCode && 
             (p.privilege === 'Free Parking' || p.priviledge === 'Free Parking')
         );
-        if (hasPrivilege) return 'Free Parking';
 
-        // 2. Check Bond Holder
-        const holder = bondHolders?.find(b => b.employee_code === empCode);
-        return holder ? `Bond Holder Tier ${holder.tier}` : '-';
+        // 2. Determine Fee Status (Is it Free?)
+        // Logic: Management OR Bond Tier 1/2 OR Privilege="Free Parking"
+        let isFree = false;
+        
+        if (posLevel === 'Management') {
+            isFree = true;
+        } else if (holder && (holder.tier === 1 || holder.tier === 2)) {
+            isFree = true;
+        } else if (priv) {
+            // "if can find privileges ... = Free Parking then treat like same logic with management"
+            isFree = true;
+        }
+
+        // 3. Determine Display Text (Priority: BondHolder > Privilege)
+        // "If find 2 value make bondholder to main data"
+        let displayText = '-';
+
+        if (holder) {
+            displayText = `Bond Holder Tier ${holder.tier}`;
+        } else if (priv) {
+            displayText = 'Free Parking';
+        }
+
+        return { isFree, displayText };
     };
 
     let beg = { count: 0, total: 0, net: 0 };
@@ -209,9 +204,8 @@ export default function Home() {
         
         const actualPlate = b.license_plate_used || vehicleMap[empCode] || '-';
         
-        // Use updated functions
-        const isFree = isFreeParking(empCode, empPosLevel);
-        const privilegeText = getPrivilegeText(empCode);
+        // Use the combined Helper
+        const { isFree, displayText } = getEmployeeStatus(empCode, empPosLevel);
 
         // Common Object for details
         const detailObj = {
@@ -228,7 +222,7 @@ export default function Home() {
         if (bStart < monthStart && bEnd >= monthStart) {
             beg.count++;
             const fee = price; 
-            const net = isFree ? 0 : fee; // Logic applied here
+            const net = isFree ? 0 : fee;
             beg.total += fee;
             beg.net += net;
         }
@@ -238,7 +232,7 @@ export default function Home() {
             const diffTime = monthEnd.getTime() - bStart.getTime();
             const daysActive = Math.round(diffTime / (1000 * 60 * 60 * 24)) + 1;
             const fee = Math.floor(dailyRate * daysActive);
-            const net = isFree ? 0 : fee; // Logic applied here
+            const net = isFree ? 0 : fee;
 
             newB.total += fee;
             newB.net += net;
@@ -251,7 +245,7 @@ export default function Home() {
             const diffTime = monthEnd.getTime() - bEnd.getTime();
             const daysLost = Math.round(diffTime / (1000 * 60 * 60 * 24)); 
             const lostFee = Math.floor(dailyRate * daysLost) * -1;
-            const lostNet = isFree ? 0 : lostFee; // Logic applied here
+            const lostNet = isFree ? 0 : lostFee;
 
             exp.total += lostFee;
             exp.net += lostNet;
@@ -268,7 +262,7 @@ export default function Home() {
             const diffTime = effectiveEnd.getTime() - effectiveStart.getTime();
             const daysOccupied = Math.round(diffTime / (1000 * 60 * 60 * 24)) + 1;
             const totalFee = Math.floor(dailyRate * daysOccupied);
-            const netFee = isFree ? 0 : totalFee; // Logic applied here
+            const netFee = isFree ? 0 : totalFee;
 
             grandTotalRevenue += totalFee;
             grandNetRevenue += netFee;
@@ -281,7 +275,7 @@ export default function Home() {
                 display_total: totalFee,
                 display_net: netFee,
                 display_type: empPosLevel,
-                display_privilege: privilegeText // Display text applied here
+                display_privilege: displayText // Using prioritized display text
             });
 
             if (bEnd >= reportCapDate && b.parking_spots?.spot_type === 'Reserved (Paid) Parking') {
@@ -296,28 +290,19 @@ export default function Home() {
         net: beg.net + newB.net + exp.net
     };
 
-    // --- PROCESS SPOTS INVENTORY (WITH VALIDITY CHECK) ---
+    // --- PROCESS SPOTS INVENTORY ---
     const inventory = {};
     let grandTotalSpots = 0;
     let totalReservedSpots = 0; 
 
     allSpots?.forEach(spot => {
-        // --- 1. CHECK SPOT VALIDITY FOR THIS MONTH ---
-        // A spot is valid if:
-        // - It started (effective_from) BEFORE the end of this month
-        // - AND (It is not expired OR It expired AFTER the start of this month)
-        
-        const effectiveFrom = spot.effective_from ? new Date(spot.effective_from) : new Date(0); // Default to long ago
-        const expiredAt = spot.expired_at ? new Date(spot.expired_at) : null; // Null means active forever
+        const effectiveFrom = spot.effective_from ? new Date(spot.effective_from) : new Date(0); 
+        const expiredAt = spot.expired_at ? new Date(spot.expired_at) : null; 
 
-        // Logic: Did this spot exist during the selected month?
         const isActiveInMonth = effectiveFrom <= monthEnd && (!expiredAt || expiredAt >= monthStart);
 
-        if (!isActiveInMonth) {
-            return; // SKIP this spot, do not count it
-        }
+        if (!isActiveInMonth) return;
 
-        // --- 2. COUNT IF VALID ---
         grandTotalSpots++;
         if (spot.spot_type === 'Reserved (Paid) Parking') totalReservedSpots++;
         
@@ -358,7 +343,6 @@ export default function Home() {
     if (!reportData) return;
     const wb = XLSX.utils.book_new();
 
-    // Sheet 1: Tenant Details
     const ws1Data = reportData.monthlyDetails.map(item => ({
         "Lot ID": item.parking_spots?.lot_id,
         "Employee Code": item.emp_code,
@@ -374,7 +358,6 @@ export default function Home() {
     const ws1 = XLSX.utils.json_to_sheet(ws1Data);
     XLSX.utils.book_append_sheet(wb, ws1, "Tenant Details");
 
-    // Sheet 2: Summary
     const ws2Data = reportData.movement.map(m => ({
         "Description": m.label, 
         "Count": m.count, 
@@ -384,7 +367,6 @@ export default function Home() {
     const ws2 = XLSX.utils.json_to_sheet(ws2Data);
     XLSX.utils.book_append_sheet(wb, ws2, "Monthly Summary");
 
-    // Sheet 3: New Bookings
     const ws3Data = reportData.newBookingsDetails.map(item => ({
         "Code": item.emp_code,
         "Name": item.emp_name,
@@ -396,7 +378,6 @@ export default function Home() {
     const ws3 = XLSX.utils.json_to_sheet(ws3Data);
     XLSX.utils.book_append_sheet(wb, ws3, "New Bookings");
 
-    // Sheet 4: Expired Bookings
     const ws4Data = reportData.expiredBookingsDetails.map(item => ({
         "Code": item.emp_code,
         "Name": item.emp_name,
@@ -418,14 +399,12 @@ export default function Home() {
   const exportPDF = () => {
     if (!reportData) return;
     try {
-        const doc = new jsPDF('l'); // Landscape
+        const doc = new jsPDF('l'); 
 
-        // Font Setup
         doc.addFileToVFS("Sarabun-Regular.ttf", fontBase64);
         doc.addFont("Sarabun-Regular.ttf", "Sarabun", "normal");
         doc.setFont("Sarabun");
 
-        // Header
         doc.setFontSize(18);
         doc.text(`Turbo Parking Report: ${reportData.monthName} ${reportData.year}`, 14, 20);
         doc.setFontSize(10);
