@@ -35,6 +35,7 @@ export const AuthProvider = ({ children }) => {
   }, []);
 
   // --- GATEKEEPER FUNCTION ---
+  // --- GATEKEEPER FUNCTION ---
   const checkVerificationAndSetUser = async (authUser) => {
     try {
       // Query the public table to check role and verification
@@ -44,13 +45,40 @@ export const AuthProvider = ({ children }) => {
         .eq('id', authUser.id)
         .single();
 
+      // --- LOGIC: If Role Row Missing (New SSO User) ---
       if (error || !data) {
-        console.error("Role check failed:", error);
-        // If we can't find the role, we assume unsafe and logout
-        await supabase.auth.signOut();
+        console.log("No role found. Checking domain for SSO...");
+
+        // 1. Check Domain
+        const email = authUser.email || '';
+        if (!email.endsWith('@turbo.co.th')) {
+          await supabase.auth.signOut();
+          alert("Access Denied: Only @turbo.co.th accounts are allowed.");
+          return;
+        }
+
+        // 2. Auto-Create Role for Company Email
+        // We assume 'is_verified' = true for company SSO, or false if you want manual approval
+        try {
+          const { error: insertError } = await supabase
+            .from('user_roles')
+            .insert([{ id: authUser.id, role: 'user', is_verified: true }]);
+
+          if (insertError) throw insertError;
+
+          // 3. Set State (Success)
+          setUser(authUser);
+          setRole('user');
+
+        } catch (err) {
+          console.error("Failed to auto-create role:", err);
+          await supabase.auth.signOut();
+          alert("Error setting up account. Please contact support.");
+        }
         return;
       }
 
+      // --- LOGIC: Existing Role Row ---
       // If Verified: Set User
       if (data.is_verified) {
         setUser(authUser);
@@ -75,14 +103,14 @@ export const AuthProvider = ({ children }) => {
     // 1. Create Auth User
     // The Database Trigger will automatically create the user_roles row now!
     const { data, error } = await supabase.auth.signUp({ email, password });
-    
+
     if (error) throw error;
 
     // 2. Force Logout immediately (so they can't use the app yet)
     if (data.user) {
       await supabase.auth.signOut();
     }
-    
+
     return data;
   };
 
