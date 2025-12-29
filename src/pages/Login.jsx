@@ -1,30 +1,31 @@
 import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
+import { supabase } from '../lib/supabase';
 import { useNavigate } from 'react-router-dom';
 import { Eye, EyeOff } from 'lucide-react'; // <--- Import Icons
 
 export default function Login() {
   const [isRegistering, setIsRegistering] = useState(false);
-  
+
   // Added confirmPassword to state
   const [formData, setFormData] = useState({ email: '', password: '', confirmPassword: '' });
-  
+
   const [error, setError] = useState('');
   const [showPassword, setShowPassword] = useState(false); // Toggle state
-  
+
   const { login, register } = useAuth();
   const navigate = useNavigate();
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
-    
+
     try {
       if (isRegistering) {
         // --- VALIDATION: Check if passwords match ---
         if (formData.password !== formData.confirmPassword) {
-            setError("Passwords do not match!");
-            return;
+          setError("Passwords do not match!");
+          return;
         }
 
         // --- REGISTER ---
@@ -32,7 +33,7 @@ export default function Login() {
         alert("Registration Successful!\n\nPlease wait for Admin approval.");
         setIsRegistering(false);
         setFormData({ email: '', password: '', confirmPassword: '' });
-        
+
       } else {
         // --- LOGIN ---
         const { error } = await login(formData.email, formData.password);
@@ -42,12 +43,12 @@ export default function Login() {
     } catch (err) {
       // Handle Supabase Errors (Incorrect password, User not found, etc.)
       if (err.message !== 'Auth session missing!') {
-          // Translate specific English error to Thai (Optional, usually generic is fine)
-          if (err.message === "Invalid login credentials") {
-             setError("Incorrect email or password.");
-          } else {
-             setError(err.message);
-          }
+        // Translate specific English error to Thai (Optional, usually generic is fine)
+        if (err.message === "Invalid login credentials") {
+          setError("Incorrect email or password.");
+        } else {
+          setError(err.message);
+        }
       }
     }
   };
@@ -64,9 +65,9 @@ export default function Login() {
 
         {/* ERROR BOX */}
         {error && (
-            <div className="bg-red-50 border border-red-200 text-red-600 p-3 rounded-lg mb-4 text-sm font-medium animate-in fade-in slide-in-from-top-2">
-                {error}
-            </div>
+          <div className="bg-red-50 border border-red-200 text-red-600 p-3 rounded-lg mb-4 text-sm font-medium animate-in fade-in slide-in-from-top-2">
+            {error}
+          </div>
         )}
 
         <form onSubmit={handleSubmit} className="space-y-4">
@@ -83,45 +84,45 @@ export default function Login() {
               onChange={(e) => setFormData({ ...formData, email: e.target.value })}
             />
           </div>
-          
+
           {/* PASSWORD FIELD */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Password</label>
             <div className="relative">
-                <input
+              <input
                 type={showPassword ? "text" : "password"}
                 required
                 placeholder="••••••••"
                 className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-[#FA4786] outline-none pr-10"
                 value={formData.password}
                 onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-                />
-                {/* EYE ICON TOGGLE */}
-                <button
-                    type="button"
-                    onClick={() => setShowPassword(!showPassword)}
-                    className="absolute right-3 top-2.5 text-gray-400 hover:text-[#FA4786] transition"
-                >
-                    {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
-                </button>
+              />
+              {/* EYE ICON TOGGLE */}
+              <button
+                type="button"
+                onClick={() => setShowPassword(!showPassword)}
+                className="absolute right-3 top-2.5 text-gray-400 hover:text-[#FA4786] transition"
+              >
+                {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
+              </button>
             </div>
           </div>
 
           {/* CONFIRM PASSWORD (Only for Register) */}
           {isRegistering && (
-              <div className="animate-in fade-in slide-in-from-top-2">
-                <label className="block text-sm font-medium text-gray-700 mb-1">Confirm Password</label>
-                <div className="relative">
-                    <input
-                    type={showPassword ? "text" : "password"}
-                    required={isRegistering}
-                    placeholder="••••••••"
-                    className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-[#FA4786] outline-none pr-10"
-                    value={formData.confirmPassword}
-                    onChange={(e) => setFormData({ ...formData, confirmPassword: e.target.value })}
-                    />
-                </div>
+            <div className="animate-in fade-in slide-in-from-top-2">
+              <label className="block text-sm font-medium text-gray-700 mb-1">Confirm Password</label>
+              <div className="relative">
+                <input
+                  type={showPassword ? "text" : "password"}
+                  required={isRegistering}
+                  placeholder="••••••••"
+                  className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-[#FA4786] outline-none pr-10"
+                  value={formData.confirmPassword}
+                  onChange={(e) => setFormData({ ...formData, confirmPassword: e.target.value })}
+                />
               </div>
+            </div>
           )}
 
           <button
@@ -130,19 +131,52 @@ export default function Login() {
           >
             {isRegistering ? "Request Account" : "Sign In"}
           </button>
+
+          {/* GOOGLE SIGN IN */}
+          {!isRegistering && (
+            <>
+              <div className="relative flex py-2 items-center">
+                <div className="flex-grow border-t border-gray-200"></div>
+                <span className="flex-shrink-0 mx-4 text-gray-400 text-xs">OR</span>
+                <div className="flex-grow border-t border-gray-200"></div>
+              </div>
+
+              <button
+                type="button"
+                onClick={async () => {
+                  // Sign in with Google
+                  const { error } = await supabase.auth.signInWithOAuth({
+                    provider: 'google',
+                    options: {
+                      redirectTo: window.location.origin, // <--- EXPLICIT REDIRECT
+                      queryParams: {
+                        access_type: 'offline',
+                        prompt: 'select_account',
+                      },
+                    }
+                  });
+                  if (error) setError(error.message);
+                }}
+                className="w-full flex items-center justify-center gap-2 bg-white border border-gray-300 text-gray-700 font-bold py-3 rounded-xl hover:bg-gray-50 transition shadow-sm"
+              >
+                <img src="https://www.svgrepo.com/show/475656/google-color.svg" alt="Google" className="w-5 h-5" />
+                Continue with Google
+              </button>
+            </>
+          )}
         </form>
 
         <div className="mt-6 text-center">
           <button
-            onClick={() => { 
-                setIsRegistering(!isRegistering); 
-                setError(''); 
-                setFormData({ email: '', password: '', confirmPassword: '' });
+            onClick={() => {
+              setIsRegistering(!isRegistering);
+              setError('');
+              setFormData({ email: '', password: '', confirmPassword: '' });
             }}
             className="text-sm text-[#002D72] hover:underline font-medium"
           >
-            {isRegistering 
-              ? "Already have an account? Sign In" 
+            {isRegistering
+              ? "Already have an account? Sign In"
               : "Need an account? Register here"}
           </button>
         </div>
