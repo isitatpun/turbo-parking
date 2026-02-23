@@ -46,7 +46,7 @@ export default function Home() {
       years.push(y);
   }
 
-  // Safety Check: Prevent selecting future dates
+  // Safety Check: Prevent selecting future dates (allows up to end of current month)
   useEffect(() => {
     if (selectedYear > currentRealYear) {
         setSelectedYear(currentRealYear);
@@ -191,11 +191,9 @@ export default function Home() {
     let grandNetRevenue = 0;
     let occupiedReservedCount = 0;
     
-    const todayMidnight = toMidnight(new Date());
-    let reportCapDate = monthEnd;
-    if (monthEnd > todayMidnight) {
-        reportCapDate = todayMidnight;
-    }
+    // Calculate out to the end of the selected month directly.
+    // Removed the todayMidnight cap logic so it fully calculates.
+    const reportCapDate = monthEnd;
 
     // --- PROCESS BOOKINGS ---
     bookings?.forEach(b => {
